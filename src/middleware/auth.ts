@@ -44,3 +44,39 @@ export function requireAuth(
   }
   next();
 }
+
+function normalizePathname(url: string): string {
+  const p = url.split("?")[0] ?? "";
+  if (p.length > 1 && p.endsWith("/")) return p.slice(0, -1);
+  return p;
+}
+
+/**
+ * Unauthenticated access is only allowed for sign-in / sign-up and CORS preflight.
+ * All other `/api/*` requests require a valid `Authorization: Bearer` session.
+ */
+const PUBLIC_API: { method: string; path: string }[] = [
+  { method: "POST", path: "/api/auth/login" },
+  { method: "POST", path: "/api/auth/register" },
+];
+
+export function requireApiAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  if (req.method === "OPTIONS") {
+    next();
+    return;
+  }
+  const pathname = normalizePathname(req.originalUrl || req.url || "");
+  if (
+    PUBLIC_API.some(
+      (r) => r.method === req.method && r.path === pathname,
+    )
+  ) {
+    next();
+    return;
+  }
+  requireAuth(req, res, next);
+}

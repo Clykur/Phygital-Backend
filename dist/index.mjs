@@ -34514,6 +34514,29 @@ function requireAuth(req, res, next) {
   }
   next();
 }
+function normalizePathname(url) {
+  const p = url.split("?")[0] ?? "";
+  if (p.length > 1 && p.endsWith("/")) return p.slice(0, -1);
+  return p;
+}
+var PUBLIC_API = [
+  { method: "POST", path: "/api/auth/login" },
+  { method: "POST", path: "/api/auth/register" }
+];
+function requireApiAuth(req, res, next) {
+  if (req.method === "OPTIONS") {
+    next();
+    return;
+  }
+  const pathname = normalizePathname(req.originalUrl || req.url || "");
+  if (PUBLIC_API.some(
+    (r) => r.method === req.method && r.path === pathname
+  )) {
+    next();
+    return;
+  }
+  requireAuth(req, res, next);
+}
 
 // src/lib/public-ids.ts
 import { createHash, randomBytes as randomBytes2 } from "node:crypto";
@@ -41297,6 +41320,12 @@ var uploads_default = router12;
 
 // src/middleware/api-rate-limit.ts
 var buckets = /* @__PURE__ */ new Map();
+var pruneCounter = 0;
+function normalizePathname2(url) {
+  const p = url.split("?")[0] ?? "";
+  if (p.length > 1 && p.endsWith("/")) return p.slice(0, -1);
+  return p;
+}
 function windowMs() {
   const raw = process.env["API_RATE_LIMIT_WINDOW_MS"];
   const n = raw ? Number(raw) : 6e4;
@@ -41304,13 +41333,23 @@ function windowMs() {
 }
 function maxForUser() {
   const raw = process.env["API_RATE_LIMIT_USER_MAX"];
-  const n = raw ? Number(raw) : 120;
-  return Number.isFinite(n) && n > 0 ? n : 120;
+  const n = raw ? Number(raw) : 200;
+  return Number.isFinite(n) && n > 0 ? n : 200;
 }
 function maxForIp() {
   const raw = process.env["API_RATE_LIMIT_IP_MAX"];
-  const n = raw ? Number(raw) : 60;
-  return Number.isFinite(n) && n > 0 ? n : 60;
+  const n = raw ? Number(raw) : 100;
+  return Number.isFinite(n) && n > 0 ? n : 100;
+}
+function authWindowMs() {
+  const raw = process.env["API_RATE_LIMIT_AUTH_WINDOW_MS"];
+  const n = raw ? Number(raw) : 9e5;
+  return Number.isFinite(n) && n > 0 ? n : 9e5;
+}
+function maxForAuthIp() {
+  const raw = process.env["API_RATE_LIMIT_AUTH_IP_MAX"];
+  const n = raw ? Number(raw) : 20;
+  return Number.isFinite(n) && n > 0 ? n : 20;
 }
 function clientIp(req) {
   const xf = req.headers["x-forwarded-for"];
@@ -41319,42 +41358,154 @@ function clientIp(req) {
   }
   return req.ip || req.socket.remoteAddress || "unknown";
 }
+function isAuthCredentialPath(method, pathname) {
+  return method === "POST" && (pathname === "/api/auth/login" || pathname === "/api/auth/register");
+}
+function isHealthPath(path5) {
+  if (!path5) return false;
+  return path5 === "/healthz" || path5.endsWith("/healthz");
+}
+function maybePruneBuckets(w, now) {
+  pruneCounter += 1;
+  if (pruneCounter < 2e3 && buckets.size < 2e4) return;
+  pruneCounter = 0;
+  const cutoff = now - 2 * w;
+  for (const [key, times] of buckets) {
+    const next = times.filter((t) => t > cutoff);
+    if (next.length === 0) buckets.delete(key);
+    else buckets.set(key, next);
+  }
+}
+function resetApprox(now, arr, w) {
+  const oldest = arr.length ? Math.min(...arr) : now;
+  return Math.ceil((oldest + w) / 1e3);
+}
 function apiRateLimitMiddleware(req, res, next) {
-  if (req.method === "GET" && (req.path === "/healthz" || req.path.endsWith("/healthz"))) {
+  if (req.method === "OPTIONS") {
     next();
     return;
   }
-  const w = windowMs();
+  if (req.method === "GET" && isHealthPath(req.path)) {
+    next();
+    return;
+  }
+  const pathname = normalizePathname2(req.originalUrl || req.url || "");
+  const authTier = isAuthCredentialPath(req.method, pathname);
+  const w = authTier ? authWindowMs() : windowMs();
   const now = Date.now();
+  maybePruneBuckets(Math.max(windowMs(), authWindowMs()), now);
   const auth = req.auth;
-  const key = auth ? `u:${auth.userId}` : `ip:${clientIp(req)}`;
-  const max = auth ? maxForUser() : maxForIp();
+  let key;
+  let max;
+  if (authTier) {
+    key = `auth:${clientIp(req)}`;
+    max = maxForAuthIp();
+  } else if (auth) {
+    key = `u:${auth.userId}`;
+    max = maxForUser();
+  } else {
+    key = `ip:${clientIp(req)}`;
+    max = maxForIp();
+  }
   const arr = (buckets.get(key) ?? []).filter((t) => now - t < w);
   if (arr.length >= max) {
+    const resetSec = resetApprox(now, arr, w);
+    res.setHeader("RateLimit-Limit", String(max));
+    res.setHeader("RateLimit-Remaining", "0");
+    res.setHeader("RateLimit-Reset", String(resetSec));
+    res.setHeader("Retry-After", String(Math.max(1, resetSec - Math.floor(now / 1e3))));
+    logger.warn(
+      { key: key.split(":")[0], ip: clientIp(req), path: pathname, max },
+      "rate limit exceeded"
+    );
     res.status(429).json({
-      error: "Too many requests. Slow down and try again shortly."
+      error: "Too many requests. Slow down and try again shortly.",
+      retryAfterSeconds: Math.max(1, resetSec - Math.floor(now / 1e3))
     });
     return;
   }
   arr.push(now);
   buckets.set(key, arr);
+  res.setHeader("RateLimit-Limit", String(max));
+  res.setHeader("RateLimit-Remaining", String(Math.max(0, max - arr.length)));
+  res.setHeader(
+    "RateLimit-Reset",
+    String(resetApprox(now, arr, w))
+  );
   next();
 }
 
+// src/middleware/error-handler.ts
+var notFoundHandler = (req, res) => {
+  res.status(404).type("application/json").json({ error: "Not Found", path: req.path });
+};
+function httpStatusFromError(err) {
+  if (typeof err === "object" && err !== null) {
+    const o = err;
+    if (typeof o.status === "number" && o.status >= 400 && o.status < 600)
+      return o.status;
+    if (typeof o.statusCode === "number" && o.statusCode >= 400 && o.statusCode < 600)
+      return o.statusCode;
+  }
+  return 500;
+}
+var errorHandler = (err, req, res, next) => {
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+  const code = httpStatusFromError(err);
+  const message2 = err instanceof Error ? err.message : "Internal Server Error";
+  logger.error(
+    { err, method: req.method, path: req.path, status: code },
+    "request failed"
+  );
+  const body = { error: message2, status: code };
+  if (process.env["NODE_ENV"] !== "production" && err instanceof Error) {
+    body["stack"] = err.stack;
+  }
+  res.status(code).type("application/json").json(body);
+};
+
 // src/app.ts
+var DEFAULT_CORS_ORIGINS = ["https://phygital-backend-qatz.onrender.com"];
+function parseCorsAllowlist() {
+  const raw = process.env["CORS_ORIGINS"]?.trim();
+  if (!raw) return [...DEFAULT_CORS_ORIGINS];
+  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+}
+function corsOriginHandler() {
+  const allowlist = parseCorsAllowlist();
+  return (requestOrigin, callback) => {
+    if (!requestOrigin) {
+      callback(null, true);
+      return;
+    }
+    if (allowlist.includes(requestOrigin)) {
+      callback(null, true);
+      return;
+    }
+    callback(null, false);
+  };
+}
 var app = express();
+app.set("trust proxy", 1);
 var uploadDir = ensureUploadDir();
 app.use(
   cors({
-    origin: "https://phygitallibrary.vercel.app",
+    origin: corsOriginHandler(),
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"]
+    allowedHeaders: ["Content-Type", "Authorization"],
+    optionsSuccessStatus: 204
   })
 );
 app.use(
   pinoHttp({
     logger,
+    autoLogging: true,
+    customReceivedMessage: (req, _res) => `${req.method} ${req.url?.split("?")[0] ?? ""} received`,
+    customSuccessMessage: (req, res, _responseTime) => `${req.method} ${req.url?.split("?")[0] ?? ""} ${res.statusCode}`,
     serializers: {
       req(req) {
         return {
@@ -41371,18 +41522,22 @@ app.use(
     }
   })
 );
-app.use("/api/uploads", authMiddleware, uploads_default);
+app.get("/", (_req, res) => {
+  res.type("application/json").json({ status: "ok", service: "phygital-api" });
+});
+app.use(
+  "/api/uploads",
+  authMiddleware,
+  apiRateLimitMiddleware,
+  requireApiAuth,
+  uploads_default
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use("/uploads", express.static(uploadDir));
-app.use("/api", authMiddleware, apiRateLimitMiddleware, routes_default);
-app.get("/", (_req, res) => {
-  res.type("application/json").json({
-    service: "phygital-api",
-    healthz: "/api/healthz",
-    note: "The student UI is served by Vite (npm run dev at repo root), not this port."
-  });
-});
+app.use("/api", authMiddleware, apiRateLimitMiddleware, requireApiAuth, routes_default);
+app.use(notFoundHandler);
+app.use(errorHandler);
 var app_default = app;
 
 // src/lib/expire-stale-assignments.ts
@@ -41979,7 +42134,12 @@ async function seedIfEmpty() {
 }
 
 // src/index.ts
-var isVercel = Boolean(process.env.VERCEL);
+pool.on("error", (err) => {
+  logger.error(
+    { err, msg: err?.message, code: err?.code },
+    "PostgreSQL pool error (idle client or connection lost)"
+  );
+});
 var WORKER_INTERVAL_MS = 6e4;
 async function runWorkerTick() {
   await Promise.all([
@@ -41999,10 +42159,9 @@ async function bootstrapLocalServer() {
   } catch (e) {
     logger.error({ err: e }, "seedIfEmpty failed");
   }
-  const port = Number(process.env.PORT);
-  const listenPort = Number.isFinite(port) && port > 0 ? port : 8787;
-  app_default.listen(listenPort, () => {
-    logger.info({ port: listenPort }, "phygital-api listening");
+  const PORT = process.env.PORT || 8787;
+  app_default.listen(PORT, () => {
+    logger.info({ port: PORT }, "phygital-api listening");
   });
   try {
     await runWorkerTick();
@@ -42010,13 +42169,14 @@ async function bootstrapLocalServer() {
     logger.error({ err: e }, "initial worker tick failed");
   }
   setInterval(() => {
-    void runWorkerTick().catch((e) => logger.error({ err: e }, "worker tick failed"));
+    void runWorkerTick().catch(
+      (e) => logger.error({ err: e }, "worker tick failed")
+    );
   }, WORKER_INTERVAL_MS);
 }
-if (!isVercel) {
+if (!process.env.VERCEL) {
   bootstrapLocalServer().catch((err) => {
     logger.error({ err }, "bootstrap failed");
-    process.exit(1);
   });
 }
 var src_default = app_default;
