@@ -7575,16 +7575,16 @@ var require_webauthn = __commonJS({
       if (typeof PublicKeyCredential !== "undefined" && "parseRequestOptionsFromJSON" in PublicKeyCredential && typeof PublicKeyCredential.parseRequestOptionsFromJSON === "function") {
         return PublicKeyCredential.parseRequestOptionsFromJSON(options);
       }
-      const { challenge: challengeStr, allowCredentials } = options, restOptions = tslib_1.__rest(
+      const { challenge: challengeStr, allowCredentials: allowCredentials2 } = options, restOptions = tslib_1.__rest(
         options,
         ["challenge", "allowCredentials"]
       );
       const challenge = (0, base64url_1.base64UrlToUint8Array)(challengeStr).buffer;
       const result = Object.assign(Object.assign({}, restOptions), { challenge });
-      if (allowCredentials && allowCredentials.length > 0) {
-        result.allowCredentials = new Array(allowCredentials.length);
-        for (let i = 0; i < allowCredentials.length; i++) {
-          const cred = allowCredentials[i];
+      if (allowCredentials2 && allowCredentials2.length > 0) {
+        result.allowCredentials = new Array(allowCredentials2.length);
+        for (let i = 0; i < allowCredentials2.length; i++) {
+          const cred = allowCredentials2[i];
           result.allowCredentials[i] = Object.assign(Object.assign({}, cred), {
             id: (0, base64url_1.base64UrlToUint8Array)(cred.id).buffer,
             type: cred.type || "public-key",
@@ -13013,7 +13013,6 @@ if (isProd) {
 
 // src/app.ts
 import express from "express";
-import cors from "cors";
 import pinoHttp from "pino-http";
 
 // src/routes/index.ts
@@ -34514,43 +34513,6 @@ function requireAuth(req, res, next) {
   }
   next();
 }
-function normalizePathname(url) {
-  const p = url.split("?")[0] ?? "";
-  if (p.length > 1 && p.endsWith("/")) return p.slice(0, -1);
-  return p;
-}
-var PUBLIC_AUTH = [
-  { method: "POST", path: "/api/auth/login" },
-  { method: "POST", path: "/api/auth/register" }
-];
-var PUBLIC_GET_PATHS = /* @__PURE__ */ new Set([
-  "/api/healthz",
-  "/api/catalog/books",
-  "/api/catalog/hubs",
-  "/api/p2p/listings",
-  "/api/placeholder-book-cover-url"
-]);
-function isPublicUnauthenticated(pathname, method) {
-  if (PUBLIC_AUTH.some((r) => r.method === method && r.path === pathname)) {
-    return true;
-  }
-  if (method === "GET" && PUBLIC_GET_PATHS.has(pathname)) {
-    return true;
-  }
-  return false;
-}
-function requireApiAuth(req, res, next) {
-  if (req.method === "OPTIONS") {
-    next();
-    return;
-  }
-  const pathname = normalizePathname(req.originalUrl || req.url || "");
-  if (isPublicUnauthenticated(pathname, req.method)) {
-    next();
-    return;
-  }
-  requireAuth(req, res, next);
-}
 
 // src/lib/public-ids.ts
 import { createHash, randomBytes as randomBytes2 } from "node:crypto";
@@ -41247,6 +41209,7 @@ router11.get("/placeholder-book-cover-url", (req, res) => {
 router11.use(health_default);
 router11.use("/auth", auth_default);
 router11.use("/catalog", catalog_default);
+router11.use(requireAuth);
 router11.use("/books", books_default);
 router11.use("/book-requests", book_requests_default);
 router11.use("/notifications", notifications_default);
@@ -41335,7 +41298,7 @@ var uploads_default = router12;
 // src/middleware/api-rate-limit.ts
 var buckets = /* @__PURE__ */ new Map();
 var pruneCounter = 0;
-function normalizePathname2(url) {
+function normalizePathname(url) {
   const p = url.split("?")[0] ?? "";
   if (p.length > 1 && p.endsWith("/")) return p.slice(0, -1);
   return p;
@@ -41403,7 +41366,7 @@ function apiRateLimitMiddleware(req, res, next) {
     next();
     return;
   }
-  const pathname = normalizePathname2(req.originalUrl || req.url || "");
+  const pathname = normalizePathname(req.originalUrl || req.url || "");
   const authTier = isAuthCredentialPath(req.method, pathname);
   const w = authTier ? authWindowMs() : windowMs();
   const now = Date.now();
@@ -41481,42 +41444,89 @@ var errorHandler = (err, req, res, next) => {
   res.status(code).type("application/json").json(body);
 };
 
+// src/middleware/cors.ts
+var ALLOW_METHODS = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
+var ALLOW_HEADERS = "Authorization, Content-Type";
+var BACKEND_ORIGIN = "https://phygital-backend-qatz.onrender.com";
+function parseAllowedOrigins() {
+  const raw = process.env.ALLOWED_ORIGINS?.trim();
+  if (!raw) {
+    return [
+      { kind: "exact", origin: "https://phygitallibrary.vercel.app" },
+      { kind: "wildcard", scheme: "https", suffix: ".vercel.app" },
+      { kind: "exact", origin: "http://localhost:5173" },
+      { kind: "exact", origin: BACKEND_ORIGIN }
+    ];
+  }
+  const parsed = raw.split(",").map((s) => s.trim()).filter(Boolean).map((s) => {
+    if (s.includes("*")) {
+      const m = /^(https?):\/\/\*\.(.+)$/i.exec(s);
+      if (!m) return { kind: "exact", origin: s };
+      return { kind: "wildcard", scheme: m[1].toLowerCase(), suffix: `.${m[2]}` };
+    }
+    return { kind: "exact", origin: s };
+  });
+  if (!parsed.some((r) => r.kind === "exact" && r.origin === BACKEND_ORIGIN)) {
+    parsed.push({ kind: "exact", origin: BACKEND_ORIGIN });
+  }
+  return parsed;
+}
+function isAllowedOrigin(origin, rules) {
+  for (const r of rules) {
+    if (r.kind === "exact") {
+      if (origin === r.origin) return true;
+      continue;
+    }
+    try {
+      const u = new URL(origin);
+      if (u.protocol !== `${r.scheme}:`) continue;
+      if (!u.hostname.endsWith(r.suffix)) continue;
+      const host = u.hostname.toLowerCase();
+      if (host === r.suffix.slice(1)) continue;
+      return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+function allowCredentials() {
+  return process.env.CORS_ALLOW_CREDENTIALS === "1" || process.env.CORS_ALLOW_CREDENTIALS === "true";
+}
+function corsMiddleware(req, res, next) {
+  const origin = req.headers.origin;
+  if (!origin || typeof origin !== "string") {
+    next();
+    return;
+  }
+  const rules = parseAllowedOrigins();
+  if (!isAllowedOrigin(origin, rules)) {
+    if (req.method === "OPTIONS" && (req.originalUrl || req.url || "").startsWith("/api/")) {
+      res.status(204).end();
+      return;
+    }
+    next();
+    return;
+  }
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", ALLOW_METHODS);
+  res.setHeader("Access-Control-Allow-Headers", ALLOW_HEADERS);
+  if (allowCredentials()) {
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+  }
+  if (req.method === "OPTIONS" && (req.originalUrl || req.url || "").startsWith("/api/")) {
+    res.status(204).end();
+    return;
+  }
+  next();
+}
+
 // src/app.ts
-var DEFAULT_CORS_ORIGINS = [
-  "https://phygitallibrary.vercel.app",
-  "https://phygital-backend-qatz.onrender.com"
-];
-function parseCorsAllowlist() {
-  const raw = process.env["CORS_ORIGINS"]?.trim();
-  if (!raw) return [...DEFAULT_CORS_ORIGINS];
-  return raw.split(",").map((s) => s.trim()).filter(Boolean);
-}
-function corsOriginHandler() {
-  const allowlist = parseCorsAllowlist();
-  return (requestOrigin, callback) => {
-    if (!requestOrigin) {
-      callback(null, true);
-      return;
-    }
-    if (allowlist.includes(requestOrigin)) {
-      callback(null, true);
-      return;
-    }
-    callback(null, false);
-  };
-}
 var app = express();
 app.set("trust proxy", 1);
 var uploadDir = ensureUploadDir();
-app.use(
-  cors({
-    origin: corsOriginHandler(),
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    optionsSuccessStatus: 204
-  })
-);
+app.use(corsMiddleware);
 app.use(
   pinoHttp({
     logger,
@@ -41546,13 +41556,12 @@ app.use(
   "/api/uploads",
   authMiddleware,
   apiRateLimitMiddleware,
-  requireApiAuth,
   uploads_default
 );
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use("/uploads", express.static(uploadDir));
-app.use("/api", authMiddleware, apiRateLimitMiddleware, requireApiAuth, routes_default);
+app.use("/api", authMiddleware, apiRateLimitMiddleware, routes_default);
 app.use(notFoundHandler);
 app.use(errorHandler);
 var app_default = app;

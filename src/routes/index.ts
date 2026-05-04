@@ -10,6 +10,7 @@ import hubRouter from "./hub";
 import activityRouter from "./activity";
 import { getPlaceholderBookCoverPublicUrl } from "../lib/book-cover-storage";
 import adminRouter from "./admin";
+import { requireAuth } from "../middleware/auth";
 
 const router: IRouter = Router();
 
@@ -20,6 +21,10 @@ router.get("/placeholder-book-cover-url", (req, res) => {
 router.use(healthRouter);
 router.use("/auth", authRouter);
 router.use("/catalog", catalogRouter);
+
+// Everything below requires a valid bearer token.
+router.use(requireAuth);
+
 router.use("/books", booksRouter);
 router.use("/book-requests", bookRequestsRouter);
 router.use("/notifications", notificationsRouter);
