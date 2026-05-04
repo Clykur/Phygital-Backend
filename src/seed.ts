@@ -6,6 +6,7 @@ import {
   books,
   hubs,
   memberships,
+  notifications,
   p2pListings,
   subscriptions,
   users,

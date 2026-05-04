@@ -1,6 +1,6 @@
 import { and, eq, isNotNull, lt } from "drizzle-orm";
 import { db } from "@workspace/db";
-import { bookRequests, books } from "@workspace/db/schema";
+import { bookRequests } from "@workspace/db/schema";
 import { notifyUser } from "./in-app-notifications";
 import { logAudit } from "./audit";
 import { logger } from "./logger";

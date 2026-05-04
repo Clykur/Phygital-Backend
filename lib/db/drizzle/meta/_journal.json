@@ -1,0 +1,83 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1776761214187,
+      "tag": "0000_add_cover_image_urls",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1776850000000,
+      "tag": "0001_seed_supabase_demo_data",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1776900000000,
+      "tag": "0002_books_created_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1776910000000,
+      "tag": "0003_student_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1776920000000,
+      "tag": "0004_book_requests_extended",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1776930000000,
+      "tag": "0005_book_p2p_pricing",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1776940000000,
+      "tag": "0006_user_profile_avatar",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1776950000000,
+      "tag": "0007_hub_kind_staff_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1776960000000,
+      "tag": "0008_hub_system_extension",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1776970000000,
+      "tag": "0009_book_request_assigned_copy_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1776980000000,
+      "tag": "0010_hub_production_hardening",
+      "breakpoints": true
+    }
+  ]
+}

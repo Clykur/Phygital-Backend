@@ -1,6 +1,6 @@
 import { inArray } from "drizzle-orm";
 import { db } from "@workspace/db";
-import { hubs } from "@workspace/db/schema";
+import { books } from "@workspace/db/schema";
 
 type HubNameFields = {
   acquiredFromHubId?: string | null;

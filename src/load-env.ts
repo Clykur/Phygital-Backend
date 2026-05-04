@@ -6,7 +6,7 @@ const require = createRequire(import.meta.url);
 const { config } = require("dotenv");
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, "../.."); // Adjusted path to point to the phygital-backend root
+const repoRoot = path.resolve(here, ".."); // phygital-backend root (parent of src/)
 const isProd = process.env["NODE_ENV"] === "production";
 
 if (isProd) {

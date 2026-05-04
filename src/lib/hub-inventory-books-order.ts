@@ -1,4 +1,5 @@
 import { asc, desc, sql } from "drizzle-orm";
+import { db } from "@workspace/db";
 import { books } from "@workspace/db/schema";
 
 /**

@@ -1,7 +1,8 @@
 import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type * as schema from "@workspace/db/schema";
-import { hubs } from "@workspace/db/schema";
+import { db } from "@workspace/db";
+import { hubs, memberships, subscriptions } from "@workspace/db/schema";
 import type { AuthUser } from "./rbac/types";
 
 export type DbClient = NodePgDatabase<typeof schema>;
