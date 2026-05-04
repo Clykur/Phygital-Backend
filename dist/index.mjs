@@ -34519,19 +34519,33 @@ function normalizePathname(url) {
   if (p.length > 1 && p.endsWith("/")) return p.slice(0, -1);
   return p;
 }
-var PUBLIC_API = [
+var PUBLIC_AUTH = [
   { method: "POST", path: "/api/auth/login" },
   { method: "POST", path: "/api/auth/register" }
 ];
+var PUBLIC_GET_PATHS = /* @__PURE__ */ new Set([
+  "/api/healthz",
+  "/api/catalog/books",
+  "/api/catalog/hubs",
+  "/api/p2p/listings",
+  "/api/placeholder-book-cover-url"
+]);
+function isPublicUnauthenticated(pathname, method) {
+  if (PUBLIC_AUTH.some((r) => r.method === method && r.path === pathname)) {
+    return true;
+  }
+  if (method === "GET" && PUBLIC_GET_PATHS.has(pathname)) {
+    return true;
+  }
+  return false;
+}
 function requireApiAuth(req, res, next) {
   if (req.method === "OPTIONS") {
     next();
     return;
   }
   const pathname = normalizePathname(req.originalUrl || req.url || "");
-  if (PUBLIC_API.some(
-    (r) => r.method === req.method && r.path === pathname
-  )) {
+  if (isPublicUnauthenticated(pathname, req.method)) {
     next();
     return;
   }
@@ -41468,7 +41482,10 @@ var errorHandler = (err, req, res, next) => {
 };
 
 // src/app.ts
-var DEFAULT_CORS_ORIGINS = ["https://phygital-backend-qatz.onrender.com"];
+var DEFAULT_CORS_ORIGINS = [
+  "https://phygitallibrary.vercel.app",
+  "https://phygital-backend-qatz.onrender.com"
+];
 function parseCorsAllowlist() {
   const raw = process.env["CORS_ORIGINS"]?.trim();
   if (!raw) return [...DEFAULT_CORS_ORIGINS];

@@ -10,13 +10,14 @@ import { ensureUploadDir } from "./lib/upload-dir";
 import { errorHandler, notFoundHandler } from "./middleware/error-handler";
 
 /**
- * CORS "origin" is the **web app** making the call (browser), not the API.
- * Default: this API’s public URL (same-origin + tools with no `Origin` header).
- * To allow a separate UI (e.g. on another host), set `CORS_ORIGINS` to a
- * comma-separated list on the server, e.g.
- * `https://phygital-backend-qatz.onrender.com,https://your-frontend.example.com`
+ * CORS origins = browser sites allowed to call this API (not the API hostname alone).
+ * Defaults: production student app + API host (Postman/curl often send no Origin).
+ * Override with `CORS_ORIGINS` (comma-separated) on Render if you add previews or domains.
  */
-const DEFAULT_CORS_ORIGINS = ["https://phygital-backend-qatz.onrender.com"] as const;
+const DEFAULT_CORS_ORIGINS = [
+  "https://phygitallibrary.vercel.app",
+  "https://phygital-backend-qatz.onrender.com",
+] as const;
 
 function parseCorsAllowlist(): string[] {
   const raw = process.env["CORS_ORIGINS"]?.trim();

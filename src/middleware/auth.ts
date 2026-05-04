@@ -52,13 +52,31 @@ function normalizePathname(url: string): string {
 }
 
 /**
- * Unauthenticated access is only allowed for sign-in / sign-up and CORS preflight.
- * All other `/api/*` requests require a valid `Authorization: Bearer` session.
+ * Paths that never require a bearer token (public browse + auth entry).
+ * Portals and mutations still require `requireAuth` on individual routes.
  */
-const PUBLIC_API: { method: string; path: string }[] = [
+const PUBLIC_AUTH: { method: string; path: string }[] = [
   { method: "POST", path: "/api/auth/login" },
   { method: "POST", path: "/api/auth/register" },
 ];
+
+const PUBLIC_GET_PATHS = new Set([
+  "/api/healthz",
+  "/api/catalog/books",
+  "/api/catalog/hubs",
+  "/api/p2p/listings",
+  "/api/placeholder-book-cover-url",
+]);
+
+function isPublicUnauthenticated(pathname: string, method: string): boolean {
+  if (PUBLIC_AUTH.some((r) => r.method === method && r.path === pathname)) {
+    return true;
+  }
+  if (method === "GET" && PUBLIC_GET_PATHS.has(pathname)) {
+    return true;
+  }
+  return false;
+}
 
 export function requireApiAuth(
   req: Request,
@@ -70,11 +88,7 @@ export function requireApiAuth(
     return;
   }
   const pathname = normalizePathname(req.originalUrl || req.url || "");
-  if (
-    PUBLIC_API.some(
-      (r) => r.method === req.method && r.path === pathname,
-    )
-  ) {
+  if (isPublicUnauthenticated(pathname, req.method)) {
     next();
     return;
   }
