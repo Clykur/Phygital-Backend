@@ -41209,11 +41209,11 @@ router11.get("/placeholder-book-cover-url", (req, res) => {
 router11.use(health_default);
 router11.use("/auth", auth_default);
 router11.use("/catalog", catalog_default);
+router11.use("/p2p", p2p_default);
 router11.use(requireAuth);
 router11.use("/books", books_default);
 router11.use("/book-requests", book_requests_default);
 router11.use("/notifications", notifications_default);
-router11.use("/p2p", p2p_default);
 router11.use("/hub", hub_default);
 router11.use("/activity", activity_default);
 router11.use("/admin", admin_default);
@@ -41417,6 +41417,26 @@ var notFoundHandler = (req, res) => {
   res.status(404).type("application/json").json({ error: "Not Found", path: req.path });
 };
 function httpStatusFromError(err) {
+  const msg = (() => {
+    if (err instanceof Error) return err.message;
+    if (typeof err === "string") return err;
+    if (typeof err === "object" && err !== null && "message" in err) {
+      const m = err.message;
+      return typeof m === "string" ? m : "";
+    }
+    return "";
+  })();
+  const stackOrString = (() => {
+    if (err instanceof Error) return `${err.name}: ${err.message}
+${err.stack ?? ""}`;
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
+  })();
+  const isDbDown = /ENETUNREACH|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN/i.test(stackOrString) || /timeout exceeded when trying to connect/i.test(msg) || /Connection terminated/i.test(msg);
+  if (isDbDown) return 503;
   if (typeof err === "object" && err !== null) {
     const o = err;
     if (typeof o.status === "number" && o.status >= 400 && o.status < 600)
@@ -41432,7 +41452,7 @@ var errorHandler = (err, req, res, next) => {
     return;
   }
   const code = httpStatusFromError(err);
-  const message2 = err instanceof Error ? err.message : "Internal Server Error";
+  const message2 = code === 503 ? "Service temporarily unavailable (database unreachable)" : err instanceof Error ? err.message : "Internal Server Error";
   logger.error(
     { err, method: req.method, path: req.path, status: code },
     "request failed"
@@ -42175,30 +42195,37 @@ async function runWorkerTick() {
   ]);
 }
 async function bootstrapLocalServer() {
-  try {
-    await ensurePublicReadableIds();
-  } catch (e) {
-    logger.error({ err: e }, "ensurePublicReadableIds failed");
-  }
-  try {
-    await seedIfEmpty();
-  } catch (e) {
-    logger.error({ err: e }, "seedIfEmpty failed");
+  const isProd2 = process.env.NODE_ENV === "production";
+  const enableSeed = process.env.ENABLE_SEED === "1" || process.env.ENABLE_SEED === "true";
+  const enableWorkers = process.env.ENABLE_WORKERS === "1" || process.env.ENABLE_WORKERS === "true";
+  if (!isProd2 || enableSeed) {
+    try {
+      await ensurePublicReadableIds();
+    } catch (e) {
+      logger.error({ err: e }, "ensurePublicReadableIds failed");
+    }
+    try {
+      await seedIfEmpty();
+    } catch (e) {
+      logger.error({ err: e }, "seedIfEmpty failed");
+    }
   }
   const PORT = process.env.PORT || 8787;
   app_default.listen(PORT, () => {
     logger.info({ port: PORT }, "phygital-api listening");
   });
-  try {
-    await runWorkerTick();
-  } catch (e) {
-    logger.error({ err: e }, "initial worker tick failed");
+  if (!isProd2 || enableWorkers) {
+    try {
+      await runWorkerTick();
+    } catch (e) {
+      logger.error({ err: e }, "initial worker tick failed");
+    }
+    setInterval(() => {
+      void runWorkerTick().catch(
+        (e) => logger.error({ err: e }, "worker tick failed")
+      );
+    }, WORKER_INTERVAL_MS);
   }
-  setInterval(() => {
-    void runWorkerTick().catch(
-      (e) => logger.error({ err: e }, "worker tick failed")
-    );
-  }, WORKER_INTERVAL_MS);
 }
 if (!process.env.VERCEL) {
   bootstrapLocalServer().catch((err) => {

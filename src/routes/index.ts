@@ -21,6 +21,7 @@ router.get("/placeholder-book-cover-url", (req, res) => {
 router.use(healthRouter);
 router.use("/auth", authRouter);
 router.use("/catalog", catalogRouter);
+router.use("/p2p", p2pRouter);
 
 // Everything below requires a valid bearer token.
 router.use(requireAuth);
@@ -28,7 +29,6 @@ router.use(requireAuth);
 router.use("/books", booksRouter);
 router.use("/book-requests", bookRequestsRouter);
 router.use("/notifications", notificationsRouter);
-router.use("/p2p", p2pRouter);
 router.use("/hub", hubRouter);
 router.use("/activity", activityRouter);
 router.use("/admin", adminRouter);

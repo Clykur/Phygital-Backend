@@ -26,15 +26,25 @@ async function runWorkerTick(): Promise<void> {
 }
 
 async function bootstrapLocalServer(): Promise<void> {
-  try {
-    await ensurePublicReadableIds();
-  } catch (e) {
-    logger.error({ err: e }, "ensurePublicReadableIds failed");
-  }
-  try {
-    await seedIfEmpty();
-  } catch (e) {
-    logger.error({ err: e }, "seedIfEmpty failed");
+  const isProd = process.env.NODE_ENV === "production";
+  const enableSeed =
+    process.env.ENABLE_SEED === "1" || process.env.ENABLE_SEED === "true";
+  const enableWorkers =
+    process.env.ENABLE_WORKERS === "1" || process.env.ENABLE_WORKERS === "true";
+
+  // In production, don't auto-seed or run DB-heavy background workers unless explicitly enabled.
+  // This prevents the API from spamming errors / failing requests when the DB is temporarily unreachable.
+  if (!isProd || enableSeed) {
+    try {
+      await ensurePublicReadableIds();
+    } catch (e) {
+      logger.error({ err: e }, "ensurePublicReadableIds failed");
+    }
+    try {
+      await seedIfEmpty();
+    } catch (e) {
+      logger.error({ err: e }, "seedIfEmpty failed");
+    }
   }
 
   const PORT = process.env.PORT || 8787;
@@ -43,16 +53,18 @@ async function bootstrapLocalServer(): Promise<void> {
     logger.info({ port: PORT }, "phygital-api listening");
   });
 
-  try {
-    await runWorkerTick();
-  } catch (e) {
-    logger.error({ err: e }, "initial worker tick failed");
+  if (!isProd || enableWorkers) {
+    try {
+      await runWorkerTick();
+    } catch (e) {
+      logger.error({ err: e }, "initial worker tick failed");
+    }
+    setInterval(() => {
+      void runWorkerTick().catch((e) =>
+        logger.error({ err: e }, "worker tick failed"),
+      );
+    }, WORKER_INTERVAL_MS);
   }
-  setInterval(() => {
-    void runWorkerTick().catch((e) =>
-      logger.error({ err: e }, "worker tick failed"),
-    );
-  }, WORKER_INTERVAL_MS);
 }
 
 /** Render / long-running Node: start HTTP + workers. Vercel sets `VERCEL` — only the app is exported, no `listen`. */

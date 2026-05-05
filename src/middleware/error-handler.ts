@@ -9,6 +9,34 @@ export const notFoundHandler: RequestHandler = (req, res) => {
 };
 
 function httpStatusFromError(err: unknown): number {
+  // Common DB connectivity failures should not be reported as generic 500s.
+  // These are transient infra/config issues (DB down, network, DNS, etc.).
+  const msg = (() => {
+    if (err instanceof Error) return err.message;
+    if (typeof err === "string") return err;
+    if (typeof err === "object" && err !== null && "message" in err) {
+      const m = (err as { message?: unknown }).message;
+      return typeof m === "string" ? m : "";
+    }
+    return "";
+  })();
+
+  const stackOrString = (() => {
+    if (err instanceof Error) return `${err.name}: ${err.message}\n${err.stack ?? ""}`;
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
+  })();
+
+  const isDbDown =
+    /ENETUNREACH|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN/i.test(stackOrString) ||
+    /timeout exceeded when trying to connect/i.test(msg) ||
+    /Connection terminated/i.test(msg);
+
+  if (isDbDown) return 503;
+
   if (typeof err === "object" && err !== null) {
     const o = err as { status?: unknown; statusCode?: unknown };
     if (typeof o.status === "number" && o.status >= 400 && o.status < 600)
@@ -27,7 +55,11 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next) => {
 
   const code = httpStatusFromError(err);
   const message =
-    err instanceof Error ? err.message : "Internal Server Error";
+    code === 503
+      ? "Service temporarily unavailable (database unreachable)"
+      : err instanceof Error
+        ? err.message
+        : "Internal Server Error";
 
   logger.error(
     { err, method: req.method, path: req.path, status: code },
