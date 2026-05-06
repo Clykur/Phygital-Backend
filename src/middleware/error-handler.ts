@@ -8,32 +8,48 @@ export const notFoundHandler: RequestHandler = (req, res) => {
     .json({ error: "Not Found", path: req.path });
 };
 
-function httpStatusFromError(err: unknown): number {
+/** Walk `Error.cause` (Drizzle/pg often nest the real failure here). */
+function errorChainText(err: unknown): { message: string; detail: string } {
+  const messages: string[] = [];
+  const details: string[] = [];
+  let e: unknown = err;
+  for (let depth = 0; e && depth < 8; depth++) {
+    if (e instanceof Error) {
+      messages.push(e.message);
+      details.push(`${e.name}: ${e.message}\n${e.stack ?? ""}`);
+      e = (e as Error & { cause?: unknown }).cause;
+    } else if (typeof e === "object" && e !== null && "message" in e) {
+      const m = (e as { message?: unknown }).message;
+      const s = typeof m === "string" ? m : "";
+      messages.push(s);
+      try {
+        details.push(JSON.stringify(e));
+      } catch {
+        details.push(String(e));
+      }
+      break;
+    } else {
+      details.push(String(e));
+      break;
+    }
+  }
+  return { message: messages.join(" | "), detail: details.join("\n---cause---\n") };
+}
+
+function httpStatusFromError(
+  err: unknown,
+  chain: { message: string; detail: string },
+): number {
   // Common DB connectivity failures should not be reported as generic 500s.
   // These are transient infra/config issues (DB down, network, DNS, etc.).
-  const msg = (() => {
-    if (err instanceof Error) return err.message;
-    if (typeof err === "string") return err;
-    if (typeof err === "object" && err !== null && "message" in err) {
-      const m = (err as { message?: unknown }).message;
-      return typeof m === "string" ? m : "";
-    }
-    return "";
-  })();
-
-  const stackOrString = (() => {
-    if (err instanceof Error) return `${err.name}: ${err.message}\n${err.stack ?? ""}`;
-    try {
-      return JSON.stringify(err);
-    } catch {
-      return String(err);
-    }
-  })();
+  const { message: msg, detail: stackOrString } = chain;
 
   const isDbDown =
-    /ENETUNREACH|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN/i.test(stackOrString) ||
+    /ENETUNREACH|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND/i.test(stackOrString) ||
     /timeout exceeded when trying to connect/i.test(msg) ||
-    /Connection terminated/i.test(msg);
+    /Connection terminated/i.test(msg) ||
+    /no pg_hba\.conf entry/i.test(msg) ||
+    /SSL connection is required/i.test(msg);
 
   if (isDbDown) return 503;
 
@@ -53,12 +69,14 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next) => {
     return;
   }
 
-  const code = httpStatusFromError(err);
+  const chain = errorChainText(err);
+  const code = httpStatusFromError(err, chain);
+  const chainMsg = chain.message;
   const message =
     code === 503
       ? "Service temporarily unavailable (database unreachable)"
       : err instanceof Error
-        ? err.message
+        ? chainMsg || err.message
         : "Internal Server Error";
 
   logger.error(

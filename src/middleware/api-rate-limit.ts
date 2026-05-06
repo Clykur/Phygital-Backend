@@ -59,7 +59,12 @@ function isAuthCredentialPath(method: string, pathname: string): boolean {
 
 function isHealthPath(path: string | undefined): boolean {
   if (!path) return false;
-  return path === "/healthz" || path.endsWith("/healthz");
+  return (
+    path === "/healthz" ||
+    path.endsWith("/healthz") ||
+    path === "/ready" ||
+    path.endsWith("/ready")
+  );
 }
 
 function maybePruneBuckets(w: number, now: number): void {

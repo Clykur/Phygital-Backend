@@ -15,6 +15,7 @@ function parseAllowedOrigins(): OriginRule[] {
       { kind: "exact", origin: "https://phygitallibrary.vercel.app" },
       { kind: "wildcard", scheme: "https", suffix: ".vercel.app" },
       { kind: "exact", origin: "http://localhost:5173" },
+      { kind: "exact", origin: "http://localhost:5174" },
       { kind: "exact", origin: BACKEND_ORIGIN },
     ];
   }

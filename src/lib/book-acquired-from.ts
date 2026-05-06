@@ -1,6 +1,4 @@
-import { inArray } from "drizzle-orm";
-import { db } from "@workspace/db";
-import { books } from "@workspace/db/schema";
+import { selectHubIdAndNameByIds } from "@workspace/db";
 
 type HubNameFields = {
   acquiredFromHubId?: string | null;
@@ -33,10 +31,7 @@ export async function enrichBooksAcquiredFromHubNames<T extends HubNameFields>(
       originalHubName: null as string | null,
     }));
   }
-  const rows = await db
-    .select({ id: hubs.id, name: hubs.name })
-    .from(hubs)
-    .where(inArray(hubs.id, idList));
+  const rows = await selectHubIdAndNameByIds(idList);
   const nameById = new Map(rows.map((h) => [h.id, h.name] as const));
   return list.map((r) => ({
     ...r,

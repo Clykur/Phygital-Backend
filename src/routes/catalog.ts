@@ -1,3 +1,7 @@
+/**
+ * Public catalog: `GET /books` and `GET /hubs` list inventory for anonymous browsing.
+ * Rent / purchase / listing creation live under other routers and require `requireAuth`.
+ */
 import { Router, type IRouter } from "express";
 import { and, desc, eq, ilike, notInArray } from "drizzle-orm";
 import { db } from "@workspace/db";

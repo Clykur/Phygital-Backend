@@ -14,9 +14,9 @@
     "typecheck": "tsc -b tsconfig.json"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.104.0",
     "@workspace/api-zod": "0.0.0",
     "@workspace/db": "0.0.0",
-    "@supabase/supabase-js": "^2.104.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2",
     "dotenv": "^17.4.2",
@@ -28,6 +28,9 @@
     "pino-http": "^10",
     "zod": "^3.25.76"
   },
+  "overrides": {
+    "drizzle-orm": "^0.45.2"
+  },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
@@ -38,6 +41,7 @@
     "esbuild": "^0.25.8",
     "esbuild-plugin-pino": "^2.3.3",
     "pino-pretty": "^13",
-    "thread-stream": "3.1.0"
+    "thread-stream": "3.1.0",
+    "typescript": "~5.9.2"
   }
 }

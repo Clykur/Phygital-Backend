@@ -17067,16 +17067,8 @@ var HealthCheckResponse = objectType({
   status: stringType()
 });
 
-// src/routes/health.ts
-var router = Router();
-router.get("/healthz", (_req, res) => {
-  const data = HealthCheckResponse.parse({ status: "ok" });
-  res.json(data);
-});
-var health_default = router;
-
-// src/routes/auth.ts
-import { Router as Router2 } from "express";
+// node_modules/drizzle-orm/node-postgres/driver.js
+import pg2 from "pg";
 
 // node_modules/drizzle-orm/entity.js
 var entityKind = Symbol.for("drizzle:entityKind");
@@ -17104,6 +17096,61 @@ function is(value, type) {
   }
   return false;
 }
+
+// node_modules/drizzle-orm/logger.js
+var ConsoleLogWriter = class {
+  static [entityKind] = "ConsoleLogWriter";
+  write(message2) {
+    console.log(message2);
+  }
+};
+var DefaultLogger = class {
+  static [entityKind] = "DefaultLogger";
+  writer;
+  constructor(config2) {
+    this.writer = config2?.writer ?? new ConsoleLogWriter();
+  }
+  logQuery(query, params) {
+    const stringifiedParams = params.map((p) => {
+      try {
+        return JSON.stringify(p);
+      } catch {
+        return String(p);
+      }
+    });
+    const paramsStr = stringifiedParams.length ? ` -- params: [${stringifiedParams.join(", ")}]` : "";
+    this.writer.write(`Query: ${query}${paramsStr}`);
+  }
+};
+var NoopLogger = class {
+  static [entityKind] = "NoopLogger";
+  logQuery() {
+  }
+};
+
+// node_modules/drizzle-orm/query-promise.js
+var QueryPromise = class {
+  static [entityKind] = "QueryPromise";
+  [Symbol.toStringTag] = "QueryPromise";
+  catch(onRejected) {
+    return this.then(void 0, onRejected);
+  }
+  finally(onFinally) {
+    return this.then(
+      (value) => {
+        onFinally?.();
+        return value;
+      },
+      (reason) => {
+        onFinally?.();
+        throw reason;
+      }
+    );
+  }
+  then(onFulfilled, onRejected) {
+    return this.execute().then(onFulfilled, onRejected);
+  }
+};
 
 // node_modules/drizzle-orm/column.js
 var Column = class {
@@ -18306,85 +18353,71 @@ function mapColumnsInSQLToAlias(query, alias) {
   }));
 }
 
-// node_modules/drizzle-orm/errors.js
-var DrizzleError = class extends Error {
-  static [entityKind] = "DrizzleError";
-  constructor({ message: message2, cause }) {
-    super(message2);
-    this.name = "DrizzleError";
-    this.cause = cause;
-  }
-};
-var DrizzleQueryError = class _DrizzleQueryError extends Error {
-  constructor(query, params, cause) {
-    super(`Failed query: ${query}
-params: ${params}`);
-    this.query = query;
-    this.params = params;
-    this.cause = cause;
-    Error.captureStackTrace(this, _DrizzleQueryError);
-    if (cause) this.cause = cause;
-  }
-};
-var TransactionRollbackError = class extends DrizzleError {
-  static [entityKind] = "TransactionRollbackError";
-  constructor() {
-    super({ message: "Rollback" });
-  }
-};
-
-// node_modules/drizzle-orm/logger.js
-var ConsoleLogWriter = class {
-  static [entityKind] = "ConsoleLogWriter";
-  write(message2) {
-    console.log(message2);
-  }
-};
-var DefaultLogger = class {
-  static [entityKind] = "DefaultLogger";
-  writer;
+// node_modules/drizzle-orm/selection-proxy.js
+var SelectionProxyHandler = class _SelectionProxyHandler {
+  static [entityKind] = "SelectionProxyHandler";
+  config;
   constructor(config2) {
-    this.writer = config2?.writer ?? new ConsoleLogWriter();
+    this.config = { ...config2 };
   }
-  logQuery(query, params) {
-    const stringifiedParams = params.map((p) => {
-      try {
-        return JSON.stringify(p);
-      } catch {
-        return String(p);
+  get(subquery, prop) {
+    if (prop === "_") {
+      return {
+        ...subquery["_"],
+        selectedFields: new Proxy(
+          subquery._.selectedFields,
+          this
+        )
+      };
+    }
+    if (prop === ViewBaseConfig) {
+      return {
+        ...subquery[ViewBaseConfig],
+        selectedFields: new Proxy(
+          subquery[ViewBaseConfig].selectedFields,
+          this
+        )
+      };
+    }
+    if (typeof prop === "symbol") {
+      return subquery[prop];
+    }
+    const columns = is(subquery, Subquery) ? subquery._.selectedFields : is(subquery, View) ? subquery[ViewBaseConfig].selectedFields : subquery;
+    const value = columns[prop];
+    if (is(value, SQL.Aliased)) {
+      if (this.config.sqlAliasedBehavior === "sql" && !value.isSelectionField) {
+        return value.sql;
       }
-    });
-    const paramsStr = stringifiedParams.length ? ` -- params: [${stringifiedParams.join(", ")}]` : "";
-    this.writer.write(`Query: ${query}${paramsStr}`);
-  }
-};
-var NoopLogger = class {
-  static [entityKind] = "NoopLogger";
-  logQuery() {
-  }
-};
-
-// node_modules/drizzle-orm/query-promise.js
-var QueryPromise = class {
-  static [entityKind] = "QueryPromise";
-  [Symbol.toStringTag] = "QueryPromise";
-  catch(onRejected) {
-    return this.then(void 0, onRejected);
-  }
-  finally(onFinally) {
-    return this.then(
-      (value) => {
-        onFinally?.();
+      const newValue = value.clone();
+      newValue.isSelectionField = true;
+      return newValue;
+    }
+    if (is(value, SQL)) {
+      if (this.config.sqlBehavior === "sql") {
         return value;
-      },
-      (reason) => {
-        onFinally?.();
-        throw reason;
       }
-    );
-  }
-  then(onFulfilled, onRejected) {
-    return this.execute().then(onFulfilled, onRejected);
+      throw new Error(
+        `You tried to reference "${prop}" field from a subquery, which is a raw SQL field, but it doesn't have an alias declared. Please add an alias to the field using ".as('alias')" method.`
+      );
+    }
+    if (is(value, Column)) {
+      if (this.config.alias) {
+        return new Proxy(
+          value,
+          new ColumnAliasProxyHandler(
+            new Proxy(
+              value.table,
+              new TableAliasProxyHandler(this.config.alias, this.config.replaceOriginalName ?? false)
+            )
+          )
+        );
+      }
+      return value;
+    }
+    if (typeof value !== "object" || value === null) {
+      return value;
+    }
+    return new Proxy(value, new _SelectionProxyHandler(this.config));
   }
 };
 
@@ -19981,6 +20014,85 @@ var PrimaryKey = class {
   }
 };
 
+// node_modules/drizzle-orm/casing.js
+function toSnakeCase(input) {
+  const words = input.replace(/['\u2019]/g, "").match(/[\da-z]+|[A-Z]+(?![a-z])|[A-Z][\da-z]+/g) ?? [];
+  return words.map((word) => word.toLowerCase()).join("_");
+}
+function toCamelCase(input) {
+  const words = input.replace(/['\u2019]/g, "").match(/[\da-z]+|[A-Z]+(?![a-z])|[A-Z][\da-z]+/g) ?? [];
+  return words.reduce((acc, word, i) => {
+    const formattedWord = i === 0 ? word.toLowerCase() : `${word[0].toUpperCase()}${word.slice(1)}`;
+    return acc + formattedWord;
+  }, "");
+}
+function noopCase(input) {
+  return input;
+}
+var CasingCache = class {
+  static [entityKind] = "CasingCache";
+  /** @internal */
+  cache = {};
+  cachedTables = {};
+  convert;
+  constructor(casing) {
+    this.convert = casing === "snake_case" ? toSnakeCase : casing === "camelCase" ? toCamelCase : noopCase;
+  }
+  getColumnCasing(column) {
+    if (!column.keyAsName) return column.name;
+    const schema = column.table[Table.Symbol.Schema] ?? "public";
+    const tableName = column.table[Table.Symbol.OriginalName];
+    const key = `${schema}.${tableName}.${column.name}`;
+    if (!this.cache[key]) {
+      this.cacheTable(column.table);
+    }
+    return this.cache[key];
+  }
+  cacheTable(table) {
+    const schema = table[Table.Symbol.Schema] ?? "public";
+    const tableName = table[Table.Symbol.OriginalName];
+    const tableKey = `${schema}.${tableName}`;
+    if (!this.cachedTables[tableKey]) {
+      for (const column of Object.values(table[Table.Symbol.Columns])) {
+        const columnKey = `${tableKey}.${column.name}`;
+        this.cache[columnKey] = this.convert(column.name);
+      }
+      this.cachedTables[tableKey] = true;
+    }
+  }
+  clearCache() {
+    this.cache = {};
+    this.cachedTables = {};
+  }
+};
+
+// node_modules/drizzle-orm/errors.js
+var DrizzleError = class extends Error {
+  static [entityKind] = "DrizzleError";
+  constructor({ message: message2, cause }) {
+    super(message2);
+    this.name = "DrizzleError";
+    this.cause = cause;
+  }
+};
+var DrizzleQueryError = class _DrizzleQueryError extends Error {
+  constructor(query, params, cause) {
+    super(`Failed query: ${query}
+params: ${params}`);
+    this.query = query;
+    this.params = params;
+    this.cause = cause;
+    Error.captureStackTrace(this, _DrizzleQueryError);
+    if (cause) this.cause = cause;
+  }
+};
+var TransactionRollbackError = class extends DrizzleError {
+  static [entityKind] = "TransactionRollbackError";
+  constructor() {
+    super({ message: "Rollback" });
+  }
+};
+
 // node_modules/drizzle-orm/sql/expressions/conditions.js
 function bindIfParam(value, column) {
   if (isDriverValueEncoder(column) && !isSQLWrapper(value) && !is(value, Param) && !is(value, Placeholder) && !is(value, Column) && !is(value, Table) && !is(value, View)) {
@@ -20369,129 +20481,6 @@ function mapRelationalRow(tablesConfig, tableConfig, row, buildQueryResultSelect
 function count(expression) {
   return sql`count(${expression || sql.raw("*")})`.mapWith(Number);
 }
-
-// node_modules/drizzle-orm/node-postgres/driver.js
-import pg2 from "pg";
-
-// node_modules/drizzle-orm/selection-proxy.js
-var SelectionProxyHandler = class _SelectionProxyHandler {
-  static [entityKind] = "SelectionProxyHandler";
-  config;
-  constructor(config2) {
-    this.config = { ...config2 };
-  }
-  get(subquery, prop) {
-    if (prop === "_") {
-      return {
-        ...subquery["_"],
-        selectedFields: new Proxy(
-          subquery._.selectedFields,
-          this
-        )
-      };
-    }
-    if (prop === ViewBaseConfig) {
-      return {
-        ...subquery[ViewBaseConfig],
-        selectedFields: new Proxy(
-          subquery[ViewBaseConfig].selectedFields,
-          this
-        )
-      };
-    }
-    if (typeof prop === "symbol") {
-      return subquery[prop];
-    }
-    const columns = is(subquery, Subquery) ? subquery._.selectedFields : is(subquery, View) ? subquery[ViewBaseConfig].selectedFields : subquery;
-    const value = columns[prop];
-    if (is(value, SQL.Aliased)) {
-      if (this.config.sqlAliasedBehavior === "sql" && !value.isSelectionField) {
-        return value.sql;
-      }
-      const newValue = value.clone();
-      newValue.isSelectionField = true;
-      return newValue;
-    }
-    if (is(value, SQL)) {
-      if (this.config.sqlBehavior === "sql") {
-        return value;
-      }
-      throw new Error(
-        `You tried to reference "${prop}" field from a subquery, which is a raw SQL field, but it doesn't have an alias declared. Please add an alias to the field using ".as('alias')" method.`
-      );
-    }
-    if (is(value, Column)) {
-      if (this.config.alias) {
-        return new Proxy(
-          value,
-          new ColumnAliasProxyHandler(
-            new Proxy(
-              value.table,
-              new TableAliasProxyHandler(this.config.alias, this.config.replaceOriginalName ?? false)
-            )
-          )
-        );
-      }
-      return value;
-    }
-    if (typeof value !== "object" || value === null) {
-      return value;
-    }
-    return new Proxy(value, new _SelectionProxyHandler(this.config));
-  }
-};
-
-// node_modules/drizzle-orm/casing.js
-function toSnakeCase(input) {
-  const words = input.replace(/['\u2019]/g, "").match(/[\da-z]+|[A-Z]+(?![a-z])|[A-Z][\da-z]+/g) ?? [];
-  return words.map((word) => word.toLowerCase()).join("_");
-}
-function toCamelCase(input) {
-  const words = input.replace(/['\u2019]/g, "").match(/[\da-z]+|[A-Z]+(?![a-z])|[A-Z][\da-z]+/g) ?? [];
-  return words.reduce((acc, word, i) => {
-    const formattedWord = i === 0 ? word.toLowerCase() : `${word[0].toUpperCase()}${word.slice(1)}`;
-    return acc + formattedWord;
-  }, "");
-}
-function noopCase(input) {
-  return input;
-}
-var CasingCache = class {
-  static [entityKind] = "CasingCache";
-  /** @internal */
-  cache = {};
-  cachedTables = {};
-  convert;
-  constructor(casing) {
-    this.convert = casing === "snake_case" ? toSnakeCase : casing === "camelCase" ? toCamelCase : noopCase;
-  }
-  getColumnCasing(column) {
-    if (!column.keyAsName) return column.name;
-    const schema = column.table[Table.Symbol.Schema] ?? "public";
-    const tableName = column.table[Table.Symbol.OriginalName];
-    const key = `${schema}.${tableName}.${column.name}`;
-    if (!this.cache[key]) {
-      this.cacheTable(column.table);
-    }
-    return this.cache[key];
-  }
-  cacheTable(table) {
-    const schema = table[Table.Symbol.Schema] ?? "public";
-    const tableName = table[Table.Symbol.OriginalName];
-    const tableKey = `${schema}.${tableName}`;
-    if (!this.cachedTables[tableKey]) {
-      for (const column of Object.values(table[Table.Symbol.Columns])) {
-        const columnKey = `${tableKey}.${column.name}`;
-        this.cache[columnKey] = this.convert(column.name);
-      }
-      this.cachedTables[tableKey] = true;
-    }
-  }
-  clearCache() {
-    this.cache = {};
-    this.cachedTables = {};
-  }
-};
 
 // node_modules/drizzle-orm/pg-core/view-base.js
 var PgViewBase = class extends View {
@@ -24034,7 +24023,7 @@ function drizzle(...params) {
   drizzle2.mock = mock;
 })(drizzle || (drizzle = {}));
 
-// lib/db/src/index.ts
+// lib/db/src/db.ts
 import pg3 from "pg";
 
 // lib/db/src/supabase-pg-url.ts
@@ -24063,7 +24052,7 @@ __export(schema_exports, {
   bookRequestHubReassignments: () => bookRequestHubReassignments,
   bookRequests: () => bookRequests,
   books: () => books,
-  hubs: () => hubs2,
+  hubs: () => hubs,
   inAppNotifications: () => inAppNotifications,
   lifecycleEvents: () => lifecycleEvents,
   memberships: () => memberships,
@@ -24095,7 +24084,7 @@ var subscriptions = pgTable("subscriptions", {
   status: text("status").notNull().default("canceled"),
   premiumUntil: timestamp("premium_until", { withTimezone: true }).notNull()
 });
-var hubs2 = pgTable("hubs", {
+var hubs = pgTable("hubs", {
   id: uuid("id").primaryKey().defaultRandom(),
   /** Public readable hub ID (e.g. HUB3F8L2M7P). */
   publicId: text("public_id").unique(),
@@ -24108,7 +24097,7 @@ var hubs2 = pgTable("hubs", {
 var memberships = pgTable("memberships", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  hubId: uuid("hub_id").notNull().references(() => hubs2.id, { onDelete: "cascade" }),
+  hubId: uuid("hub_id").notNull().references(() => hubs.id, { onDelete: "cascade" }),
   /** hub_user = desk/library staff; hub_admin = lead with same desk powers (future: extra admin-only actions). */
   role: text("role").notNull().default("hub_user")
 });
@@ -24118,7 +24107,7 @@ var books = pgTable("books", {
   refId: text("ref_id").unique(),
   title: text("title").notNull(),
   coverImageUrl: text("cover_image_url"),
-  hubId: uuid("hub_id").notNull().references(() => hubs2.id, { onDelete: "cascade" }),
+  hubId: uuid("hub_id").notNull().references(() => hubs.id, { onDelete: "cascade" }),
   /** available | reserved | checked_out | unavailable | sold | transfer_pending | in_transit */
   status: text("status").notNull().default("available"),
   condition: text("condition").notNull().default("good"),
@@ -24135,26 +24124,26 @@ var books = pgTable("books", {
   }),
   dueAt: timestamp("due_at", { withTimezone: true }),
   returnedAt: timestamp("returned_at", { withTimezone: true }),
-  returnedHubId: uuid("returned_hub_id").references(() => hubs2.id, { onDelete: "set null" }),
+  returnedHubId: uuid("returned_hub_id").references(() => hubs.id, { onDelete: "set null" }),
   soldToUserId: uuid("sold_to_user_id").references(() => users.id, {
     onDelete: "set null"
   }),
   soldAt: timestamp("sold_at", { withTimezone: true }),
   /** Set when a desk shelf-acquisition completes at destination; UI shows "From: …". */
-  acquiredFromHubId: uuid("acquired_from_hub_id").references(() => hubs2.id, {
+  acquiredFromHubId: uuid("acquired_from_hub_id").references(() => hubs.id, {
     onDelete: "set null"
   }),
   /** Destination hub for an in-flight inter-hub transfer (purchase with acquireForHubId). */
-  targetHubId: uuid("target_hub_id").references(() => hubs2.id, { onDelete: "set null" }),
+  targetHubId: uuid("target_hub_id").references(() => hubs.id, { onDelete: "set null" }),
   /** Source hub when transfer started (physical location until received). */
-  originalHubId: uuid("original_hub_id").references(() => hubs2.id, { onDelete: "set null" }),
+  originalHubId: uuid("original_hub_id").references(() => hubs.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
 });
 var p2pListings = pgTable("p2p_listings", {
   id: uuid("id").primaryKey().defaultRandom(),
   ownerId: uuid("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  hubId: uuid("hub_id").notNull().references(() => hubs2.id, { onDelete: "cascade" }),
+  hubId: uuid("hub_id").notNull().references(() => hubs.id, { onDelete: "cascade" }),
   bookTitle: text("book_title").notNull(),
   coverImageUrl: text("cover_image_url"),
   /** Whole rupees — peer purchase price. */
@@ -24165,7 +24154,7 @@ var p2pListings = pgTable("p2p_listings", {
   type: text("type").notNull().default("sell"),
   /** listed | pending_dropoff | available | reserved | sold | completed | expired | rejected */
   status: text("status").notNull().default("listed"),
-  dropoffHubId: uuid("dropoff_hub_id").references(() => hubs2.id, {
+  dropoffHubId: uuid("dropoff_hub_id").references(() => hubs.id, {
     onDelete: "set null"
   }),
   buyerId: uuid("buyer_id").references(() => users.id, { onDelete: "set null" }),
@@ -24175,7 +24164,7 @@ var p2pListings = pgTable("p2p_listings", {
   borrowDueAt: timestamp("borrow_due_at", { withTimezone: true }),
   pickedAt: timestamp("picked_at", { withTimezone: true }),
   returnedAt: timestamp("returned_at", { withTimezone: true }),
-  returnedHubId: uuid("returned_hub_id").references(() => hubs2.id, {
+  returnedHubId: uuid("returned_hub_id").references(() => hubs.id, {
     onDelete: "set null"
   }),
   completedAt: timestamp("completed_at", { withTimezone: true }),
@@ -24186,7 +24175,7 @@ var p2pListings = pgTable("p2p_listings", {
 var bookRequests = pgTable("book_requests", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  hubId: uuid("hub_id").notNull().references(() => hubs2.id, { onDelete: "cascade" }),
+  hubId: uuid("hub_id").notNull().references(() => hubs.id, { onDelete: "cascade" }),
   bookTitle: text("book_title"),
   notes: text("notes"),
   /** requested | routed | fulfilled | ready | picked | expired | cancelled */
@@ -24205,8 +24194,8 @@ var bookRequests = pgTable("book_requests", {
 var bookRequestHubReassignments = pgTable("book_request_hub_reassignments", {
   id: uuid("id").primaryKey().defaultRandom(),
   requestId: uuid("request_id").notNull().references(() => bookRequests.id, { onDelete: "cascade" }),
-  fromHubId: uuid("from_hub_id").notNull().references(() => hubs2.id, { onDelete: "cascade" }),
-  toHubId: uuid("to_hub_id").notNull().references(() => hubs2.id, { onDelete: "cascade" }),
+  fromHubId: uuid("from_hub_id").notNull().references(() => hubs.id, { onDelete: "cascade" }),
+  toHubId: uuid("to_hub_id").notNull().references(() => hubs.id, { onDelete: "cascade" }),
   reassignedBy: uuid("reassigned_by").notNull().references(() => users.id, { onDelete: "set null" }),
   reassignedAt: timestamp("reassigned_at", { withTimezone: true }).notNull().defaultNow()
 });
@@ -24214,7 +24203,7 @@ var lifecycleEvents = pgTable("lifecycle_events", {
   id: uuid("id").primaryKey().defaultRandom(),
   eventType: text("event_type").notNull(),
   userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
-  hubId: uuid("hub_id").references(() => hubs2.id, { onDelete: "set null" }),
+  hubId: uuid("hub_id").references(() => hubs.id, { onDelete: "set null" }),
   bookId: uuid("book_id").references(() => books.id, { onDelete: "set null" }),
   metadata: jsonb("metadata").$type().notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
@@ -24235,7 +24224,7 @@ var auditLogs2 = pgTable("audit_logs", {
   userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
   /** Actor who performed the action (typically same as userId; set explicitly for clarity). */
   actorId: uuid("actor_id").references(() => users.id, { onDelete: "set null" }),
-  hubId: uuid("hub_id").references(() => hubs2.id, { onDelete: "set null" }),
+  hubId: uuid("hub_id").references(() => hubs.id, { onDelete: "set null" }),
   action: text("action").notNull(),
   resourceType: text("resource_type"),
   resourceId: text("resource_id"),
@@ -24256,7 +24245,7 @@ var notificationDeliveries = pgTable("notification_deliveries", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
 });
 
-// lib/db/src/index.ts
+// lib/db/src/db.ts
 var { Pool: Pool2 } = pg3;
 if (!process.env.DATABASE_URL) {
   throw new Error(
@@ -24275,6 +24264,34 @@ function poolConfigFromEnv() {
 }
 var pool = new Pool2(poolConfigFromEnv());
 var db = drizzle(pool, { schema: schema_exports });
+
+// lib/db/src/select-hub-names.ts
+async function selectHubIdAndNameByIds(ids) {
+  if (ids.length === 0) return [];
+  return db.select({ id: hubs.id, name: hubs.name }).from(hubs).where(inArray(hubs.id, ids));
+}
+
+// src/routes/health.ts
+var router = Router();
+router.get("/healthz", (_req, res) => {
+  const data = HealthCheckResponse.parse({ status: "ok" });
+  res.json(data);
+});
+router.get("/ready", async (_req, res) => {
+  try {
+    await pool.query("SELECT 1");
+    res.status(200).type("application/json").json({ ok: true });
+  } catch {
+    res.status(503).type("application/json").json({
+      ok: false,
+      error: "database_unreachable"
+    });
+  }
+});
+var health_default = router;
+
+// src/routes/auth.ts
+import { Router as Router2 } from "express";
 
 // src/lib/password.ts
 import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
@@ -25663,7 +25680,7 @@ async function loadAuthUser(userId) {
     role: m.role === "hub_admin" ? "hub_admin" : "hub_user"
   }));
   if (user.baseRole === "super_admin") {
-    const allHubs = await db.select({ id: hubs2.id }).from(hubs2);
+    const allHubs = await db.select({ id: hubs.id }).from(hubs);
     hubStaffHubIds = [.../* @__PURE__ */ new Set([...hubStaffHubIds, ...allHubs.map((h) => h.id)])];
     const existing = new Set(hubMemberships.map((m) => m.hubId));
     for (const hubId of hubStaffHubIds) {
@@ -34558,7 +34575,7 @@ async function nextUserPublicId(baseRole) {
   return generateUnique(prefix, users, users.publicId);
 }
 async function nextHubPublicId() {
-  return generateUnique("HUB", hubs2, hubs2.publicId);
+  return generateUnique("HUB", hubs, hubs.publicId);
 }
 async function nextBookRefId() {
   return generateUnique("REF", books, books.refId);
@@ -34569,10 +34586,10 @@ async function ensurePublicReadableIds() {
     const publicId = await nextUserPublicId(row.baseRole);
     await db.update(users).set({ publicId }).where(eq(users.id, row.id));
   }
-  const hubRows = await db.select({ id: hubs2.id }).from(hubs2).where(isNull(hubs2.publicId));
+  const hubRows = await db.select({ id: hubs.id }).from(hubs).where(isNull(hubs.publicId));
   for (const row of hubRows) {
     const publicId = await nextHubPublicId();
-    await db.update(hubs2).set({ publicId }).where(eq(hubs2.id, row.id));
+    await db.update(hubs).set({ publicId }).where(eq(hubs.id, row.id));
   }
   const bookRows = await db.select({ id: books.id }).from(books).where(isNull(books.refId));
   for (const row of bookRows) {
@@ -34652,12 +34669,12 @@ router2.post("/register", async (req, res) => {
         const hubName = parsed.data.hubName.trim();
         const hubLocation = parsed.data.hubLocation.trim();
         const hubKind = parsed.data.hubKind;
-        const [hub] = await tx.insert(hubs2).values({
+        const [hub] = await tx.insert(hubs).values({
           name: hubName,
           location: hubLocation,
           kind: hubKind,
           publicId: await nextHubPublicId()
-        }).returning({ id: hubs2.id });
+        }).returning({ id: hubs.id });
         await tx.insert(memberships).values({
           userId: row.id,
           hubId: hub.id,
@@ -34781,7 +34798,7 @@ async function enrichBooksAcquiredFromHubNames(list) {
       originalHubName: null
     }));
   }
-  const rows = await db.select({ id: hubs.id, name: hubs.name }).from(hubs).where(inArray(hubs.id, idList));
+  const rows = await selectHubIdAndNameByIds(idList);
   const nameById = new Map(rows.map((h) => [h.id, h.name]));
   return list.map((r) => ({
     ...r,
@@ -34799,7 +34816,7 @@ function escapeIlikePattern(s) {
 var EXCLUDE_FROM_PUBLIC_CATALOG = ["transfer_pending", "in_transit"];
 var notInterHubTransfer = notInArray(books.status, [...EXCLUDE_FROM_PUBLIC_CATALOG]);
 function fromActiveHubBooks() {
-  return db.select({ b: books }).from(books).innerJoin(hubs2, and(eq(books.hubId, hubs2.id), eq(hubs2.isActive, true)));
+  return db.select({ b: books }).from(books).innerJoin(hubs, and(eq(books.hubId, hubs.id), eq(hubs.isActive, true)));
 }
 router3.get("/books", authMiddleware, async (req, res) => {
   await reconcileOverdueBooks();
@@ -34824,7 +34841,7 @@ router3.get("/books", authMiddleware, async (req, res) => {
   res.json({ books: booksPayload });
 });
 router3.get("/hubs", authMiddleware, async (_req, res) => {
-  const rows = await db.select().from(hubs2).where(eq(hubs2.isActive, true));
+  const rows = await db.select().from(hubs).where(eq(hubs.isActive, true));
   res.json({ hubs: rows });
 });
 var catalog_default = router3;
@@ -34852,7 +34869,7 @@ var ACTIONS = {
 
 // src/lib/hub-guards.ts
 async function getHubActive(dbOrTx, hubId) {
-  const [h] = await dbOrTx.select({ isActive: hubs2.isActive }).from(hubs2).where(eq(hubs2.id, hubId)).limit(1);
+  const [h] = await dbOrTx.select({ isActive: hubs.isActive }).from(hubs).where(eq(hubs.id, hubId)).limit(1);
   return h?.isActive !== false;
 }
 async function requireActiveHub(dbOrTx, hubId) {
@@ -36220,7 +36237,7 @@ router5.post("/", authMiddleware, requireAuth, async (req, res) => {
     });
     return;
   }
-  const [hubRow] = await db.select({ id: hubs2.id, isActive: hubs2.isActive }).from(hubs2).where(eq(hubs2.id, parsed.data.hubId)).limit(1);
+  const [hubRow] = await db.select({ id: hubs.id, isActive: hubs.isActive }).from(hubs).where(eq(hubs.id, parsed.data.hubId)).limit(1);
   if (!hubRow) {
     res.status(400).json({ error: "Unknown hub. Pick a valid hub from the list." });
     return;
@@ -37633,8 +37650,8 @@ var TRANSACTION_ACTIONS = [
 ];
 var ATTENTION_W = { pending: 3, ready: 2, p2p: 2 };
 async function getSuperAdminNetworkKpis() {
-  const [hAll] = await db.select({ n: count() }).from(hubs2);
-  const [hActive] = await db.select({ n: count() }).from(hubs2).where(eq(hubs2.isActive, true));
+  const [hAll] = await db.select({ n: count() }).from(hubs);
+  const [hActive] = await db.select({ n: count() }).from(hubs).where(eq(hubs.isActive, true));
   const [uAll] = await db.select({ n: count() }).from(users);
   const [uStudent] = await db.select({ n: count() }).from(users).where(eq(users.baseRole, "user"));
   const [uHub] = await db.select({ n: count() }).from(users).where(eq(users.baseRole, "hub"));
@@ -37682,7 +37699,7 @@ function computeSuperAdminDerivatives(m, requestBreakdown, range) {
 }
 async function computeHubAttentionRanks(hubIds) {
   if (hubIds.length === 0) return [];
-  const hubMeta = await db.select({ id: hubs2.id, name: hubs2.name, isActive: hubs2.isActive, kind: hubs2.kind }).from(hubs2).where(inArray(hubs2.id, hubIds));
+  const hubMeta = await db.select({ id: hubs.id, name: hubs.name, isActive: hubs.isActive, kind: hubs.kind }).from(hubs).where(inArray(hubs.id, hubIds));
   const metaById = new Map(hubMeta.map((h) => [h.id, h]));
   const byHub = /* @__PURE__ */ new Map();
   for (const id of hubIds) {
@@ -37771,12 +37788,12 @@ async function buildHubOverviewPayload(hubIds, hubIdFilter, range) {
   const periodStart = overviewRangeStart(range);
   const dayStart = todayStart();
   const hubRows = await db.select({
-    id: hubs2.id,
-    name: hubs2.name,
-    kind: hubs2.kind,
-    isActive: hubs2.isActive,
-    location: hubs2.location
-  }).from(hubs2).where(inArray(hubs2.id, effective));
+    id: hubs.id,
+    name: hubs.name,
+    kind: hubs.kind,
+    isActive: hubs.isActive,
+    location: hubs.location
+  }).from(hubs).where(inArray(hubs.id, effective));
   const primaryHub = effective.length === 1 ? hubRows.find((h) => h.id === effective[0]) ?? null : null;
   const bookStats = await db.select({
     status: books.status,
@@ -38146,7 +38163,7 @@ function outboundSummary(action, title) {
 }
 async function buildHubCommercePayload(hubStaffHubIds, hubIdFilter, hubAccountUserId, limit) {
   const effective = hubIdFilter && hubStaffHubIds.includes(hubIdFilter) ? [hubIdFilter] : hubStaffHubIds;
-  const hubMetaRows = await db.select({ id: hubs2.id, name: hubs2.name }).from(hubs2).where(inArray(hubs2.id, effective));
+  const hubMetaRows = await db.select({ id: hubs.id, name: hubs.name }).from(hubs).where(inArray(hubs.id, effective));
   const hubLabelById = new Map(hubMetaRows.map((h) => [h.id, h.name]));
   const hubListingIdRows = await db.select({ id: p2pListings.id }).from(p2pListings).where(inArray(p2pListings.hubId, effective));
   const hubListingIds = hubListingIdRows.map((r) => r.id);
@@ -38218,7 +38235,7 @@ async function buildHubCommercePayload(hubStaffHubIds, hubIdFilter, hubAccountUs
   ];
   const hubNameById = /* @__PURE__ */ new Map();
   if (hubIds.length > 0) {
-    const hh = await db.select({ id: hubs2.id, name: hubs2.name }).from(hubs2).where(inArray(hubs2.id, hubIds));
+    const hh = await db.select({ id: hubs.id, name: hubs.name }).from(hubs).where(inArray(hubs.id, hubIds));
     for (const h of hh) hubNameById.set(h.id, h.name);
   }
   const inbound = inboundRows.map((r) => {
@@ -39097,7 +39114,7 @@ router8.get("/inventory-dashboard", authMiddleware, requireAuth, async (req, res
   }
   const hubIdParam = typeof req.query["hubId"] === "string" ? req.query["hubId"] : void 0;
   const effectiveHubIds = hubIdParam && hubIds.includes(hubIdParam) ? [hubIdParam] : hubIds;
-  const hubMeta = await db.select({ id: hubs2.id, name: hubs2.name }).from(hubs2).where(inArray(hubs2.id, effectiveHubIds));
+  const hubMeta = await db.select({ id: hubs.id, name: hubs.name }).from(hubs).where(inArray(hubs.id, effectiveHubIds));
   const nameById = new Map(hubMeta.map((h) => [h.id, h.name]));
   const rows = await db.select({
     hubId: books.hubId,
@@ -39309,7 +39326,7 @@ router9.get("/timeline", authMiddleware, requireAuth, async (req, res) => {
   const allHubIdsForNames = [.../* @__PURE__ */ new Set([...uniqueHubIds, ...fromHubIdsFromMeta])];
   const hubNameById = /* @__PURE__ */ new Map();
   if (allHubIdsForNames.length > 0) {
-    const hh = await db.select({ id: hubs2.id, name: hubs2.name }).from(hubs2).where(inArray(hubs2.id, allHubIdsForNames));
+    const hh = await db.select({ id: hubs.id, name: hubs.name }).from(hubs).where(inArray(hubs.id, allHubIdsForNames));
     for (const h of hh) hubNameById.set(h.id, h.name);
   }
   const events = rows.map((r) => {
@@ -39616,7 +39633,7 @@ async function getSystemHealth(hubIdFilter) {
       action: { kind: "close_request", requestId: r.id, outcome: "expired" }
     });
   }
-  const hubMeta = await db.select({ id: hubs2.id, name: hubs2.name }).from(hubs2);
+  const hubMeta = await db.select({ id: hubs.id, name: hubs.name }).from(hubs);
   const hubName = (id) => hubMeta.find((h) => h.id === id)?.name ?? "Hub";
   const allReq = await db.select({
     hubId: bookRequests.hubId,
@@ -39693,7 +39710,7 @@ async function getSystemHealth(hubIdFilter) {
     });
   }
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1e3);
-  const activeHubs = await db.select({ id: hubs2.id, name: hubs2.name }).from(hubs2).where(eq(hubs2.isActive, true));
+  const activeHubs = await db.select({ id: hubs.id, name: hubs.name }).from(hubs).where(eq(hubs.isActive, true));
   const recentHubActivity = await db.select({ hubId: auditLogs2.hubId, n: count() }).from(auditLogs2).where(and(isNotNull(auditLogs2.hubId), sql`${auditLogs2.createdAt} >= ${sevenDaysAgo}`)).groupBy(auditLogs2.hubId);
   const hubActivityMap = new Map(
     recentHubActivity.filter((r) => r.hubId != null).map((r) => [r.hubId, Number(r.n)])
@@ -40014,7 +40031,7 @@ async function reassignBookRequestToHub(params) {
     if (row.hubId === newHubId) {
       return { request: null, previousHubId: null, reassigned: false, code: "same_hub" };
     }
-    const [h] = await tx.select().from(hubs2).where(eq(hubs2.id, newHubId)).limit(1);
+    const [h] = await tx.select().from(hubs).where(eq(hubs.id, newHubId)).limit(1);
     if (!h) {
       return { request: null, previousHubId: null, reassigned: false, code: "no_hub" };
     }
@@ -40148,9 +40165,9 @@ router10.get("/users/:userId", requireSuperAdmin, async (req, res) => {
   const mems = await db.select({
     hubId: memberships.hubId,
     role: memberships.role,
-    hubName: hubs2.name,
-    hubKind: hubs2.kind
-  }).from(memberships).innerJoin(hubs2, eq(memberships.hubId, hubs2.id)).where(eq(memberships.userId, userId));
+    hubName: hubs.name,
+    hubKind: hubs.kind
+  }).from(memberships).innerJoin(hubs, eq(memberships.hubId, hubs.id)).where(eq(memberships.userId, userId));
   const hubPurchases = await db.select({
     id: books.id,
     title: books.title,
@@ -40158,18 +40175,18 @@ router10.get("/users/:userId", requireSuperAdmin, async (req, res) => {
     price: books.buyPrice,
     source: books.source,
     hubId: books.hubId,
-    hubName: hubs2.name,
+    hubName: hubs.name,
     soldAt: books.soldAt
-  }).from(books).innerJoin(hubs2, eq(books.hubId, hubs2.id)).where(and(eq(books.soldToUserId, userId), eq(books.source, "hub_inventory"))).orderBy(desc(books.soldAt), desc(books.updatedAt));
+  }).from(books).innerJoin(hubs, eq(books.hubId, hubs.id)).where(and(eq(books.soldToUserId, userId), eq(books.source, "hub_inventory"))).orderBy(desc(books.soldAt), desc(books.updatedAt));
   const p2pPurchases = await db.select({
     id: p2pListings.id,
     title: p2pListings.bookTitle,
     coverImageUrl: p2pListings.coverImageUrl,
     price: p2pListings.price,
     hubId: p2pListings.hubId,
-    hubName: hubs2.name,
+    hubName: hubs.name,
     soldAt: p2pListings.soldAt
-  }).from(p2pListings).innerJoin(hubs2, eq(p2pListings.hubId, hubs2.id)).where(and(eq(p2pListings.buyerId, userId), eq(p2pListings.status, "sold"))).orderBy(desc(p2pListings.soldAt), desc(p2pListings.updatedAt));
+  }).from(p2pListings).innerJoin(hubs, eq(p2pListings.hubId, hubs.id)).where(and(eq(p2pListings.buyerId, userId), eq(p2pListings.status, "sold"))).orderBy(desc(p2pListings.soldAt), desc(p2pListings.updatedAt));
   const sales = await db.select({
     id: p2pListings.id,
     title: p2pListings.bookTitle,
@@ -40177,18 +40194,18 @@ router10.get("/users/:userId", requireSuperAdmin, async (req, res) => {
     price: p2pListings.price,
     buyerId: p2pListings.buyerId,
     hubId: p2pListings.hubId,
-    hubName: hubs2.name,
+    hubName: hubs.name,
     soldAt: p2pListings.soldAt
-  }).from(p2pListings).innerJoin(hubs2, eq(p2pListings.hubId, hubs2.id)).where(and(eq(p2pListings.ownerId, userId), eq(p2pListings.status, "sold"))).orderBy(desc(p2pListings.soldAt), desc(p2pListings.updatedAt));
+  }).from(p2pListings).innerJoin(hubs, eq(p2pListings.hubId, hubs.id)).where(and(eq(p2pListings.ownerId, userId), eq(p2pListings.status, "sold"))).orderBy(desc(p2pListings.soldAt), desc(p2pListings.updatedAt));
   const activeBorrowRows = await db.select({
     id: books.id,
     title: books.title,
     coverImageUrl: books.coverImageUrl,
     hubId: books.hubId,
-    hubName: hubs2.name,
+    hubName: hubs.name,
     borrowedAt: books.updatedAt,
     dueAt: books.dueAt
-  }).from(books).innerJoin(hubs2, eq(books.hubId, hubs2.id)).where(eq(books.borrowerUserId, userId)).orderBy(desc(books.updatedAt));
+  }).from(books).innerJoin(hubs, eq(books.hubId, hubs.id)).where(eq(books.borrowerUserId, userId)).orderBy(desc(books.updatedAt));
   const returnedBorrowRows = await db.select({
     id: auditLogs2.id,
     actionAt: auditLogs2.createdAt,
@@ -40196,8 +40213,8 @@ router10.get("/users/:userId", requireSuperAdmin, async (req, res) => {
     title: books.title,
     coverImageUrl: books.coverImageUrl,
     hubId: books.hubId,
-    hubName: hubs2.name
-  }).from(auditLogs2).innerJoin(books, sql`${books.id}::text = ${auditLogs2.resourceId}`).innerJoin(hubs2, eq(books.hubId, hubs2.id)).where(
+    hubName: hubs.name
+  }).from(auditLogs2).innerJoin(books, sql`${books.id}::text = ${auditLogs2.resourceId}`).innerJoin(hubs, eq(books.hubId, hubs.id)).where(
     and(
       eq(auditLogs2.userId, userId),
       eq(auditLogs2.action, "BOOK_RETURN"),
@@ -40442,14 +40459,14 @@ router10.get("/hubs", requireSuperAdmin, async (req, res) => {
   const offset = Math.max(0, parseInt(String(req.query.offset ?? "0"), 10) || 0);
   const pattern = q ? `%${escapeIlikePattern3(q)}%` : null;
   const whereClause = pattern ? or(
-    ilike(hubs2.name, pattern),
-    ilike(hubs2.location, pattern),
-    ilike(hubs2.kind, pattern)
+    ilike(hubs.name, pattern),
+    ilike(hubs.location, pattern),
+    ilike(hubs.kind, pattern)
   ) : void 0;
-  const fromHubs = db.select({ n: count() }).from(hubs2);
+  const fromHubs = db.select({ n: count() }).from(hubs);
   const [totalRow] = whereClause ? await fromHubs.where(whereClause) : await fromHubs;
-  const fromHubsList = db.select().from(hubs2);
-  const hubList = whereClause ? await fromHubsList.where(whereClause).orderBy(asc(hubs2.name)).limit(limit).offset(offset) : await fromHubsList.orderBy(asc(hubs2.name)).limit(limit).offset(offset);
+  const fromHubsList = db.select().from(hubs);
+  const hubList = whereClause ? await fromHubsList.where(whereClause).orderBy(asc(hubs.name)).limit(limit).offset(offset) : await fromHubsList.orderBy(asc(hubs.name)).limit(limit).offset(offset);
   const memberCounts = await db.select({ hubId: memberships.hubId, n: count() }).from(memberships).groupBy(memberships.hubId);
   const nByHub = new Map(memberCounts.map((r) => [r.hubId, r.n]));
   const listIds = hubList.map((h) => h.id);
@@ -40489,7 +40506,7 @@ router10.get("/hubs/:hubId", requireSuperAdmin, async (req, res) => {
     return;
   }
   const hubId = parsed.data;
-  const [h] = await db.select().from(hubs2).where(eq(hubs2.id, hubId)).limit(1);
+  const [h] = await db.select().from(hubs).where(eq(hubs.id, hubId)).limit(1);
   if (!h) {
     res.status(404).json({ error: "Hub not found" });
     return;
@@ -40655,18 +40672,18 @@ router10.patch("/hubs/:hubId", requireSuperAdmin, async (req, res) => {
     return;
   }
   const b = body.data;
-  const [h] = await db.select().from(hubs2).where(eq(hubs2.id, hubId)).limit(1);
+  const [h] = await db.select().from(hubs).where(eq(hubs.id, hubId)).limit(1);
   if (!h) {
     res.status(404).json({ error: "Hub not found" });
     return;
   }
-  const [updated] = await db.update(hubs2).set({
+  const [updated] = await db.update(hubs).set({
     ...b.name != null ? { name: b.name } : {},
     ...b.location != null ? { location: b.location } : {},
     ...b.kind != null ? { kind: b.kind } : {},
     ...b.isActive != null ? { isActive: b.isActive } : {},
     ...b.capacity !== void 0 ? { capacity: b.capacity } : {}
-  }).where(eq(hubs2.id, hubId)).returning();
+  }).where(eq(hubs.id, hubId)).returning();
   if (!updated) {
     res.status(404).json({ error: "Hub not found" });
     return;
@@ -40705,12 +40722,12 @@ router10.post("/hubs/:hubId/enable", requireSuperAdmin, async (req, res) => {
     return;
   }
   const hubId = parsed.data;
-  const [existing] = await db.select().from(hubs2).where(eq(hubs2.id, hubId)).limit(1);
+  const [existing] = await db.select().from(hubs).where(eq(hubs.id, hubId)).limit(1);
   if (!existing) {
     res.status(404).json({ error: "Hub not found" });
     return;
   }
-  await db.update(hubs2).set({ isActive: true }).where(eq(hubs2.id, hubId));
+  await db.update(hubs).set({ isActive: true }).where(eq(hubs.id, hubId));
   await logAudit({
     userId: null,
     actorId: req.auth.userId,
@@ -40729,12 +40746,12 @@ router10.post("/hubs/:hubId/disable", requireSuperAdmin, async (req, res) => {
     return;
   }
   const hubId = parsed.data;
-  const [existing] = await db.select().from(hubs2).where(eq(hubs2.id, hubId)).limit(1);
+  const [existing] = await db.select().from(hubs).where(eq(hubs.id, hubId)).limit(1);
   if (!existing) {
     res.status(404).json({ error: "Hub not found" });
     return;
   }
-  await db.update(hubs2).set({ isActive: false }).where(eq(hubs2.id, hubId));
+  await db.update(hubs).set({ isActive: false }).where(eq(hubs.id, hubId));
   await logAudit({
     userId: null,
     actorId: req.auth.userId,
@@ -40758,7 +40775,7 @@ router10.delete("/hubs/:hubId", requireSuperAdmin, async (req, res) => {
     return;
   }
   const hubId = parsed.data;
-  const [existing] = await db.select().from(hubs2).where(eq(hubs2.id, hubId)).limit(1);
+  const [existing] = await db.select().from(hubs).where(eq(hubs.id, hubId)).limit(1);
   if (!existing) {
     res.status(404).json({ error: "Hub not found" });
     return;
@@ -40767,7 +40784,7 @@ router10.delete("/hubs/:hubId", requireSuperAdmin, async (req, res) => {
     res.status(400).json({ error: "Confirmation name does not match hub name." });
     return;
   }
-  await db.delete(hubs2).where(eq(hubs2.id, hubId));
+  await db.delete(hubs).where(eq(hubs.id, hubId));
   await logAudit({
     userId: null,
     actorId: req.auth.userId,
@@ -40875,7 +40892,7 @@ router10.post("/users/:userId/memberships", requireSuperAdmin, async (req, res) 
     res.status(404).json({ error: "User not found" });
     return;
   }
-  const [h] = await db.select().from(hubs2).where(eq(hubs2.id, body.data.hubId)).limit(1);
+  const [h] = await db.select().from(hubs).where(eq(hubs.id, body.data.hubId)).limit(1);
   if (!h) {
     res.status(400).json({ error: "Hub not found" });
     return;
@@ -41009,7 +41026,7 @@ router10.post("/book-requests/:id/reassign-hub", requireSuperAdmin, async (req, 
     res.status(409).json({ error: "Could not update" });
     return;
   }
-  const hubNameRow = await db.select({ name: hubs2.name }).from(hubs2).where(eq(hubs2.id, r.request.hubId)).limit(1);
+  const hubNameRow = await db.select({ name: hubs.name }).from(hubs).where(eq(hubs.id, r.request.hubId)).limit(1);
   await notifyUser({
     userId: r.request.userId,
     kind: "book_request_reassigned",
@@ -41340,7 +41357,7 @@ function isAuthCredentialPath(method, pathname) {
 }
 function isHealthPath(path5) {
   if (!path5) return false;
-  return path5 === "/healthz" || path5.endsWith("/healthz");
+  return path5 === "/healthz" || path5.endsWith("/healthz") || path5 === "/ready" || path5.endsWith("/ready");
 }
 function maybePruneBuckets(w, now) {
   pruneCounter += 1;
@@ -41416,26 +41433,36 @@ function apiRateLimitMiddleware(req, res, next) {
 var notFoundHandler = (req, res) => {
   res.status(404).type("application/json").json({ error: "Not Found", path: req.path });
 };
-function httpStatusFromError(err) {
-  const msg = (() => {
-    if (err instanceof Error) return err.message;
-    if (typeof err === "string") return err;
-    if (typeof err === "object" && err !== null && "message" in err) {
-      const m = err.message;
-      return typeof m === "string" ? m : "";
+function errorChainText(err) {
+  const messages = [];
+  const details = [];
+  let e = err;
+  for (let depth = 0; e && depth < 8; depth++) {
+    if (e instanceof Error) {
+      messages.push(e.message);
+      details.push(`${e.name}: ${e.message}
+${e.stack ?? ""}`);
+      e = e.cause;
+    } else if (typeof e === "object" && e !== null && "message" in e) {
+      const m = e.message;
+      const s = typeof m === "string" ? m : "";
+      messages.push(s);
+      try {
+        details.push(JSON.stringify(e));
+      } catch {
+        details.push(String(e));
+      }
+      break;
+    } else {
+      details.push(String(e));
+      break;
     }
-    return "";
-  })();
-  const stackOrString = (() => {
-    if (err instanceof Error) return `${err.name}: ${err.message}
-${err.stack ?? ""}`;
-    try {
-      return JSON.stringify(err);
-    } catch {
-      return String(err);
-    }
-  })();
-  const isDbDown = /ENETUNREACH|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN/i.test(stackOrString) || /timeout exceeded when trying to connect/i.test(msg) || /Connection terminated/i.test(msg);
+  }
+  return { message: messages.join(" | "), detail: details.join("\n---cause---\n") };
+}
+function httpStatusFromError(err, chain) {
+  const { message: msg, detail: stackOrString } = chain;
+  const isDbDown = /ENETUNREACH|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND/i.test(stackOrString) || /timeout exceeded when trying to connect/i.test(msg) || /Connection terminated/i.test(msg) || /no pg_hba\.conf entry/i.test(msg) || /SSL connection is required/i.test(msg);
   if (isDbDown) return 503;
   if (typeof err === "object" && err !== null) {
     const o = err;
@@ -41451,8 +41478,10 @@ var errorHandler = (err, req, res, next) => {
     next(err);
     return;
   }
-  const code = httpStatusFromError(err);
-  const message2 = code === 503 ? "Service temporarily unavailable (database unreachable)" : err instanceof Error ? err.message : "Internal Server Error";
+  const chain = errorChainText(err);
+  const code = httpStatusFromError(err, chain);
+  const chainMsg = chain.message;
+  const message2 = code === 503 ? "Service temporarily unavailable (database unreachable)" : err instanceof Error ? chainMsg || err.message : "Internal Server Error";
   logger.error(
     { err, method: req.method, path: req.path, status: code },
     "request failed"
@@ -41475,6 +41504,7 @@ function parseAllowedOrigins() {
       { kind: "exact", origin: "https://phygitallibrary.vercel.app" },
       { kind: "wildcard", scheme: "https", suffix: ".vercel.app" },
       { kind: "exact", origin: "http://localhost:5173" },
+      { kind: "exact", origin: "http://localhost:5174" },
       { kind: "exact", origin: BACKEND_ORIGIN }
     ];
   }
@@ -41918,11 +41948,11 @@ async function ensureMembership(userId, hubId, role) {
 }
 async function seedIfEmpty() {
   try {
-    const [{ c: hubCount }] = await db.select({ c: count() }).from(hubs2);
-    let hubList = await db.select().from(hubs2).orderBy(asc(hubs2.name));
+    const [{ c: hubCount }] = await db.select({ c: count() }).from(hubs);
+    let hubList = await db.select().from(hubs).orderBy(asc(hubs.name));
     const createdFreshHubs = Number(hubCount) === 0;
     if (createdFreshHubs) {
-      hubList = await db.insert(hubs2).values([...HUB_SEEDS]).returning();
+      hubList = await db.insert(hubs).values([...HUB_SEEDS]).returning();
     }
     if (hubList.length === 0) return;
     const byIdx = (i) => hubList[Math.min(i, hubList.length - 1)];

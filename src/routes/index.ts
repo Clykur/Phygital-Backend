@@ -1,3 +1,10 @@
+/**
+ * API surface:
+ * - Mounted **before** `requireAuth`: public marketplace browse — health, auth entry,
+ *   `GET /catalog/*`, `GET /p2p/listings`, placeholder cover URL.
+ * - Mounted **after** `requireAuth`: authenticated flows — shelf/checkout, hub ops,
+ *   notifications, admin, and all P2P mutations (create listing, buy, borrow, etc.).
+ */
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
 import authRouter from "./auth";

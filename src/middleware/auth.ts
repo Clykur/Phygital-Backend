@@ -62,6 +62,7 @@ const PUBLIC_AUTH: { method: string; path: string }[] = [
 
 const PUBLIC_GET_PATHS = new Set([
   "/api/healthz",
+  "/api/ready",
   "/api/catalog/books",
   "/api/catalog/hubs",
   "/api/p2p/listings",

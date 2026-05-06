@@ -1,3 +1,7 @@
+/**
+ * P2P marketplace: `GET /listings` is public (browse without JWT). Create/update/delete listings and
+ * commerce flows use `requireAuth` — rent, buy, sell require login.
+ */
 import { Router, type IRouter } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
