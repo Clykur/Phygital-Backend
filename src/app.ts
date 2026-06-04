@@ -41,6 +41,7 @@ app.use(
   }),
 );
 
+app.get("/ping", (_req, res) => res.json({ ping: "pong" }));
 app.get("/", (_req, res) => {
   res.type("application/json").json({ status: "ok", service: "phygital-api" });
 });

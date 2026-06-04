@@ -18,6 +18,7 @@ export const users = pgTable("users", {
   baseRole: text("base_role").notNull().default("user"),
   /** active | held | deactivated */
   accountStatus: text("account_status").notNull().default("active"),
+  phone: text("phone"),
   /** Object key in private profile-images bucket (Supabase) or relative path under upload dir (local). */
   avatarStoragePath: text("avatar_storage_path"),
   avatarUpdatedAt: timestamp("avatar_updated_at", { withTimezone: true }),
@@ -66,6 +67,8 @@ export const books = pgTable("books", {
   /** Public readable copy reference ID (e.g. REF5K8D1Z3N). */
   refId: text("ref_id").unique(),
   title: text("title").notNull(),
+  author: text("author"),
+  isbn: text("isbn"),
   coverImageUrl: text("cover_image_url"),
   hubId: uuid("hub_id")
     .notNull()

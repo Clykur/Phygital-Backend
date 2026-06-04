@@ -8,6 +8,12 @@ import {
   hubs,
   p2pListings,
   users,
+  memberships,
+  wallets,
+  walletTransactions,
+  userSubscriptions,
+  subscriptionPlans,
+  lifecycleEvents,
 } from "@workspace/db/schema";
 import { ACTIONS } from "../lib/rbac/actions";
 import { authorize } from "../lib/rbac/authorize";
@@ -1100,10 +1106,188 @@ router.get("/desk-p2p-listings", authMiddleware, requireAuth, async (req, res) =
     .from(books)
     .where(isNotNull(books.listingId));
   const withPhysicalCopy = new Set(
-    bookRows.map((r) => r.listingId).filter((id): id is string => id != null),
+    bookRows.map((r: any) => r.listingId).filter((id: any): id is string => id != null),
   );
-  const pipeline = listingRows.filter((l) => !withPhysicalCopy.has(l.id));
+  const pipeline = listingRows.filter((l: any) => !withPhysicalCopy.has(l.id));
   res.json({ listings: pipeline });
+});
+
+router.get("/telemetry", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth!;
+  if (!auth.hubStaffHubIds || auth.hubStaffHubIds.length === 0) {
+    res.status(403).json({ error: "Not hub staff" });
+    return;
+  }
+  // Return telemetry violations (simulated for now, as hardware integration handles this)
+  res.json({ violations: [] });
+});
+
+router.get("/zones", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth!;
+  if (!auth.hubStaffHubIds || auth.hubStaffHubIds.length === 0) {
+    res.status(403).json({ error: "Not hub staff" });
+    return;
+  }
+  const zones = [
+    { id: 'zone_1', name: 'Computer Science', type: 'shelf', x: 20, y: 30, width: 25, height: 15, aisle: 'A', status: 'idle', details: 'CS, AI, Systems' },
+    { id: 'zone_2', name: 'Mechanical & Civil', type: 'shelf', x: 50, y: 30, width: 25, height: 15, aisle: 'B', status: 'idle', details: 'Core Engineering' },
+    { id: 'zone_3', name: 'Kiosk Desk 1', type: 'kiosk', x: 10, y: 70, width: 12, height: 12, status: 'busy', details: 'Checkout & Returns' },
+    { id: 'zone_4', name: 'RFID Exit Gate', type: 'gate', x: 80, y: 70, width: 8, height: 20, status: 'idle', details: 'Security Telemetry' }
+  ];
+  res.json({ zones });
+});
+
+
+
+router.get("/students", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth!;
+  if (auth.hubStaffHubIds.length === 0) {
+    res.status(403).json({ error: "Hub staff access required." });
+    return;
+  }
+  const hubId = typeof req.query["hubId"] === "string" ? req.query["hubId"] : auth.hubStaffHubIds[0];
+  if (!auth.hubStaffHubIds.includes(hubId) && auth.baseRole !== "super_admin") {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 20;
+    const offset = (page - 1) * limit;
+
+    const studentMemberships = await db
+      .select({
+        user: users,
+        wallet: wallets,
+        subscription: userSubscriptions,
+        plan: subscriptionPlans,
+      })
+      .from(memberships)
+      .where(and(eq(memberships.hubId, hubId), eq(memberships.role, "student")))
+      .innerJoin(users, eq(users.id, memberships.userId))
+      .leftJoin(wallets, eq(wallets.userId, users.id))
+      .leftJoin(userSubscriptions, eq(userSubscriptions.userId, users.id))
+      .leftJoin(subscriptionPlans, eq(subscriptionPlans.id, userSubscriptions.planId))
+      .limit(limit)
+      .offset(offset);
+
+    const result = await Promise.all(studentMemberships.map(async (row: any) => {
+      let earned = 0;
+      let spent = 0;
+      if (row.wallet) {
+        const txs = await db.select().from(walletTransactions).where(eq(walletTransactions.walletId, row.wallet.id));
+        txs.forEach((t: any) => {
+          if (t.type === 'credit') earned += t.amount;
+          if (t.type === 'debit') spent += t.amount;
+        });
+      }
+      
+      const [lastEvt] = await db.select().from(lifecycleEvents)
+        .where(eq(lifecycleEvents.userId, row.user.id))
+        .orderBy(sql`created_at DESC`)
+        .limit(1);
+
+      return {
+        id: row.user.id,
+        publicId: row.user.publicId,
+        name: row.user.name,
+        email: row.user.email,
+        phone: row.user.phone,
+        accountStatus: row.user.accountStatus,
+        createdAt: row.user.createdAt,
+        walletBalance: row.wallet?.balance || 0,
+        creditsEarned: earned,
+        creditsSpent: spent,
+        subscriptionStatus: row.subscription?.status || "none",
+        subscriptionPlan: row.plan?.name || "Free",
+        lastActivityDate: lastEvt?.createdAt || row.user.createdAt,
+      };
+    }));
+
+    const [{ count: total }] = await db
+      .select({ count: sql`count(*)`.mapWith(Number) })
+      .from(memberships)
+      .where(and(eq(memberships.hubId, hubId), eq(memberships.role, "student")));
+
+    res.json({
+      students: result,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      }
+    });
+  } catch (error) {
+    logger.error({ error, hubId }, "Error fetching hub students");
+    res.status(500).json({ error: "Failed to fetch students" });
+  }
+});
+
+router.get("/students/analytics", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth!;
+  if (auth.hubStaffHubIds.length === 0) {
+    res.status(403).json({ error: "Hub staff access required." });
+    return;
+  }
+  const hubId = typeof req.query["hubId"] === "string" ? req.query["hubId"] : auth.hubStaffHubIds[0];
+  if (!auth.hubStaffHubIds.includes(hubId) && auth.baseRole !== "super_admin") {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+
+  try {
+    const studentMemberships = await db
+      .select({
+        user: users,
+        wallet: wallets,
+        subscription: userSubscriptions,
+        plan: subscriptionPlans,
+      })
+      .from(memberships)
+      .where(and(eq(memberships.hubId, hubId), eq(memberships.role, "student")))
+      .innerJoin(users, eq(users.id, memberships.userId))
+      .leftJoin(wallets, eq(wallets.userId, users.id))
+      .leftJoin(userSubscriptions, eq(userSubscriptions.userId, users.id))
+      .leftJoin(subscriptionPlans, eq(subscriptionPlans.id, userSubscriptions.planId));
+
+    let totalStudents = studentMemberships.length;
+    let activeSubscriptions = 0;
+    let expiredSubscriptions = 0;
+    let totalCreditsIssued = 0;
+    let totalCreditsRedeemed = 0;
+
+    for (const row of studentMemberships) {
+      if (row.subscription?.status === 'active') activeSubscriptions++;
+      if (row.subscription?.status === 'canceled' && row.subscription?.premiumUntil && new Date(row.subscription.premiumUntil) < new Date()) {
+        expiredSubscriptions++;
+      }
+      if (row.wallet) {
+        const txs = await db.select().from(walletTransactions).where(eq(walletTransactions.walletId, row.wallet.id));
+        txs.forEach((t: any) => {
+          if (t.type === 'credit') totalCreditsIssued += t.amount;
+          if (t.type === 'debit') totalCreditsRedeemed += t.amount;
+        });
+      }
+    }
+
+    res.json({
+      totalStudents,
+      activeSubscriptions,
+      expiredSubscriptions,
+      totalCreditsIssued,
+      totalCreditsRedeemed,
+      walletActivityTrends: {
+        issued: totalCreditsIssued,
+        redeemed: totalCreditsRedeemed,
+        net: totalCreditsIssued - totalCreditsRedeemed
+      }
+    });
+  } catch (error) {
+    logger.error({ error, hubId }, "Error fetching hub student analytics");
+    res.status(500).json({ error: "Failed to fetch student analytics" });
+  }
 });
 
 export default router;

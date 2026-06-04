@@ -13016,7 +13016,7 @@ import express from "express";
 import pinoHttp from "pino-http";
 
 // src/routes/index.ts
-import { Router as Router11 } from "express";
+import { Router as Router13 } from "express";
 
 // src/routes/health.ts
 import { Router } from "express";
@@ -17065,6 +17065,114 @@ var NEVER = INVALID;
 // lib/api-zod/src/generated/api.ts
 var HealthCheckResponse = objectType({
   status: stringType()
+});
+
+// lib/api-zod/src/dtos.ts
+var hubKindSchema = external_exports.enum([
+  "college",
+  "public",
+  "government",
+  "private",
+  "other"
+]);
+var registerSchema = external_exports.object({
+  name: external_exports.string().min(1),
+  email: external_exports.string().email(),
+  password: external_exports.string().min(8),
+  accountType: external_exports.enum(["student", "hub", "user", "super_admin"]).optional(),
+  isPremium: external_exports.boolean().optional(),
+  hubName: external_exports.string().optional(),
+  hubLocation: external_exports.string().optional(),
+  hubKind: hubKindSchema.optional()
+}).superRefine((data, ctx) => {
+  const t = data.accountType ?? "student";
+  if (t !== "hub") return;
+  if (!data.hubName?.trim()) {
+    ctx.addIssue({ code: external_exports.ZodIssueCode.custom, message: "Hub name is required", path: ["hubName"] });
+  }
+  if (!data.hubLocation?.trim()) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "Hub location is required",
+      path: ["hubLocation"]
+    });
+  }
+  if (!data.hubKind) {
+    ctx.addIssue({ code: external_exports.ZodIssueCode.custom, message: "Hub type is required", path: ["hubKind"] });
+  }
+});
+var loginSchema = external_exports.object({
+  email: external_exports.string().email(),
+  password: external_exports.string().min(1)
+});
+var patchBookSchema = external_exports.object({
+  title: external_exports.string().min(1).optional(),
+  condition: external_exports.enum(["new", "good", "fair"]).optional(),
+  status: external_exports.enum(["available", "checked_out", "reserved", "unavailable", "sold"]).optional()
+});
+var hubPurchaseBodySchema = external_exports.object({
+  acquireForHubId: external_exports.string().uuid().optional()
+});
+var userDtoSchema = external_exports.object({
+  id: external_exports.string().uuid(),
+  publicId: external_exports.string().nullable(),
+  name: external_exports.string(),
+  email: external_exports.string().email(),
+  baseRole: external_exports.string(),
+  accountStatus: external_exports.string(),
+  avatarStoragePath: external_exports.string().nullable(),
+  phone: external_exports.string().nullable().optional(),
+  createdAt: external_exports.string().or(external_exports.date())
+});
+var bookDtoSchema = external_exports.object({
+  id: external_exports.string().uuid(),
+  refId: external_exports.string().nullable(),
+  title: external_exports.string(),
+  author: external_exports.string().nullable().optional(),
+  isbn: external_exports.string().nullable().optional(),
+  coverImageUrl: external_exports.string().nullable(),
+  hubId: external_exports.string().uuid(),
+  status: external_exports.string(),
+  condition: external_exports.string(),
+  source: external_exports.string(),
+  buyPrice: external_exports.number(),
+  borrowPrice: external_exports.number(),
+  borrowerUserId: external_exports.string().nullable(),
+  dueAt: external_exports.string().or(external_exports.date()).nullable(),
+  returnedAt: external_exports.string().or(external_exports.date()).nullable(),
+  updatedAt: external_exports.string().or(external_exports.date()),
+  createdAt: external_exports.string().or(external_exports.date())
+});
+var walletDtoSchema = external_exports.object({
+  id: external_exports.string().uuid(),
+  userId: external_exports.string().uuid(),
+  balance: external_exports.number(),
+  createdAt: external_exports.string().or(external_exports.date()),
+  updatedAt: external_exports.string().or(external_exports.date())
+});
+var walletTransactionDtoSchema = external_exports.object({
+  id: external_exports.string().uuid(),
+  walletId: external_exports.string().uuid(),
+  type: external_exports.string(),
+  amount: external_exports.number(),
+  description: external_exports.string(),
+  createdAt: external_exports.string().or(external_exports.date())
+});
+var subscriptionPlanDtoSchema = external_exports.object({
+  id: external_exports.string().uuid(),
+  tier: external_exports.string(),
+  name: external_exports.string(),
+  price: external_exports.number(),
+  creditReward: external_exports.number(),
+  isActive: external_exports.number()
+});
+var userSubscriptionDtoSchema = external_exports.object({
+  id: external_exports.string().uuid(),
+  userId: external_exports.string().uuid(),
+  planId: external_exports.string().uuid(),
+  status: external_exports.string(),
+  currentPeriodStart: external_exports.string().or(external_exports.date()),
+  currentPeriodEnd: external_exports.string().or(external_exports.date())
 });
 
 // node_modules/drizzle-orm/node-postgres/driver.js
@@ -24058,8 +24166,12 @@ __export(schema_exports, {
   memberships: () => memberships,
   notificationDeliveries: () => notificationDeliveries,
   p2pListings: () => p2pListings,
+  subscriptionPlans: () => subscriptionPlans,
   subscriptions: () => subscriptions,
-  users: () => users
+  userSubscriptions: () => userSubscriptions,
+  users: () => users,
+  walletTransactions: () => walletTransactions,
+  wallets: () => wallets
 });
 
 // lib/db/src/schema/rbac.ts
@@ -24073,6 +24185,7 @@ var users = pgTable("users", {
   baseRole: text("base_role").notNull().default("user"),
   /** active | held | deactivated */
   accountStatus: text("account_status").notNull().default("active"),
+  phone: text("phone"),
   /** Object key in private profile-images bucket (Supabase) or relative path under upload dir (local). */
   avatarStoragePath: text("avatar_storage_path"),
   avatarUpdatedAt: timestamp("avatar_updated_at", { withTimezone: true }),
@@ -24106,6 +24219,8 @@ var books = pgTable("books", {
   /** Public readable copy reference ID (e.g. REF5K8D1Z3N). */
   refId: text("ref_id").unique(),
   title: text("title").notNull(),
+  author: text("author"),
+  isbn: text("isbn"),
   coverImageUrl: text("cover_image_url"),
   hubId: uuid("hub_id").notNull().references(() => hubs.id, { onDelete: "cascade" }),
   /** available | reserved | checked_out | unavailable | sold | transfer_pending | in_transit */
@@ -24241,6 +24356,46 @@ var notificationDeliveries = pgTable("notification_deliveries", {
   status: text("status").notNull().default("pending"),
   retryCount: integer("retry_count").notNull().default(0),
   lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
+
+// lib/db/src/schema/wallet.ts
+var wallets = pgTable("wallets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }).unique(),
+  balance: integer("balance").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
+var walletTransactions = pgTable("wallet_transactions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  walletId: uuid("wallet_id").notNull().references(() => wallets.id, { onDelete: "cascade" }),
+  /** credit | debit | transfer */
+  type: text("type").notNull(),
+  amount: integer("amount").notNull(),
+  description: text("description").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+});
+var subscriptionPlans = pgTable("subscription_plans", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  /** e.g. "free", "pro" */
+  tier: text("tier").notNull().unique(),
+  name: text("name").notNull(),
+  price: integer("price").notNull(),
+  /** How many credits they get when subscribing/renewing */
+  creditReward: integer("credit_reward").notNull().default(0),
+  isActive: integer("is_active").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+});
+var userSubscriptions = pgTable("user_subscriptions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }).unique(),
+  planId: uuid("plan_id").notNull().references(() => subscriptionPlans.id, { onDelete: "restrict" }),
+  /** active | canceled | past_due */
+  status: text("status").notNull().default("active"),
+  currentPeriodStart: timestamp("current_period_start", { withTimezone: true }).notNull(),
+  currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
 });
@@ -25702,7 +25857,10 @@ async function loadAuthUser(userId) {
     premiumUntil,
     hubStaffHubIds,
     hubMemberships,
-    profileImageUpdatedAt: user.avatarUpdatedAt?.toISOString() ?? null
+    profileImageUpdatedAt: user.avatarUpdatedAt?.toISOString() ?? null,
+    phone: user.phone ?? null,
+    accountStatus: user.accountStatus,
+    createdAt: user.createdAt.toISOString()
   };
 }
 
@@ -34599,42 +34757,8 @@ async function ensurePublicReadableIds() {
 }
 
 // src/routes/auth.ts
-var hubKindSchema = external_exports.enum([
-  "college",
-  "public",
-  "government",
-  "private",
-  "other"
-]);
-var registerSchema = external_exports.object({
-  name: external_exports.string().min(1),
-  email: external_exports.string().email(),
-  password: external_exports.string().min(8),
-  accountType: external_exports.enum(["student", "hub"]).optional(),
-  hubName: external_exports.string().optional(),
-  hubLocation: external_exports.string().optional(),
-  hubKind: hubKindSchema.optional()
-}).superRefine((data, ctx) => {
-  const t = data.accountType ?? "student";
-  if (t !== "hub") return;
-  if (!data.hubName?.trim()) {
-    ctx.addIssue({ code: external_exports.ZodIssueCode.custom, message: "Hub name is required", path: ["hubName"] });
-  }
-  if (!data.hubLocation?.trim()) {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      message: "Hub location is required",
-      path: ["hubLocation"]
-    });
-  }
-  if (!data.hubKind) {
-    ctx.addIssue({ code: external_exports.ZodIssueCode.custom, message: "Hub type is required", path: ["hubKind"] });
-  }
-});
-var loginSchema = external_exports.object({
-  email: external_exports.string().email(),
-  password: external_exports.string().min(1)
-});
+import { OAuth2Client } from "google-auth-library";
+var googleClient = new OAuth2Client(process.env.VITE_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID);
 var router2 = Router2();
 router2.post("/register", async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
@@ -34657,15 +34781,33 @@ router2.post("/register", async (req, res) => {
         name,
         email,
         passwordHash,
-        baseRole: accountType === "hub" ? "hub" : "user",
-        publicId: await nextUserPublicId(accountType === "hub" ? "hub" : "user")
+        baseRole: accountType === "super_admin" ? "super_admin" : accountType === "hub" ? "hub" : "user",
+        publicId: await nextUserPublicId(accountType === "super_admin" ? "super_admin" : accountType === "hub" ? "hub" : "user")
       }).returning({ id: users.id });
+      const isPremium = parsed.data.isPremium;
+      const until = /* @__PURE__ */ new Date();
+      if (isPremium) until.setMonth(until.getMonth() + 12);
       await tx.insert(subscriptions).values({
         userId: row.id,
-        status: "canceled",
-        premiumUntil: /* @__PURE__ */ new Date(0)
+        status: isPremium ? "active" : "canceled",
+        premiumUntil: isPremium ? until : /* @__PURE__ */ new Date(0)
       });
-      if (accountType === "hub") {
+      await tx.insert(wallets).values({
+        userId: row.id,
+        balance: 0
+      });
+      const [freePlan] = await tx.select().from(subscriptionPlans).where(eq(subscriptionPlans.tier, "free")).limit(1);
+      if (freePlan) {
+        await tx.insert(userSubscriptions).values({
+          userId: row.id,
+          planId: freePlan.id,
+          status: "active",
+          currentPeriodStart: /* @__PURE__ */ new Date(),
+          currentPeriodEnd: new Date((/* @__PURE__ */ new Date()).setFullYear((/* @__PURE__ */ new Date()).getFullYear() + 10))
+          // far future
+        });
+      }
+      if (accountType === "hub" || accountType === "super_admin" && parsed.data.hubName) {
         const hubName = parsed.data.hubName.trim();
         const hubLocation = parsed.data.hubLocation.trim();
         const hubKind = parsed.data.hubKind;
@@ -34680,6 +34822,25 @@ router2.post("/register", async (req, res) => {
           hubId: hub.id,
           role: "hub_admin"
         });
+      } else if (accountType === "student" && parsed.data.hubLocation) {
+        const hubLoc = parsed.data.hubLocation.trim();
+        const [hub] = await tx.select().from(hubs).where(eq(hubs.publicId, hubLoc)).limit(1);
+        if (hub) {
+          await tx.insert(memberships).values({
+            userId: row.id,
+            hubId: hub.id,
+            role: "student"
+          });
+        } else {
+          const [hubByLoc] = await tx.select().from(hubs).where(eq(hubs.location, hubLoc)).limit(1);
+          if (hubByLoc) {
+            await tx.insert(memberships).values({
+              userId: row.id,
+              hubId: hubByLoc.id,
+              role: "student"
+            });
+          }
+        }
       }
       return row.id;
     });
@@ -34713,6 +34874,72 @@ router2.post("/login", async (req, res) => {
   }
   const token = await signToken(authUser);
   res.json({ token, user: authUser });
+});
+router2.post("/google", async (req, res) => {
+  const { token } = req.body;
+  if (!token) {
+    res.status(400).json({ error: "Missing Google token" });
+    return;
+  }
+  try {
+    const ticket = await googleClient.verifyIdToken({
+      idToken: token,
+      audience: process.env.VITE_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID
+    });
+    const payload = ticket.getPayload();
+    if (!payload || !payload.email) {
+      res.status(400).json({ error: "Invalid Google payload" });
+      return;
+    }
+    const email = payload.email;
+    const name = payload.name || email.split("@")[0];
+    let [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    let userId = user?.id;
+    let isNewUser = false;
+    if (!user) {
+      const passwordHash = await hashPassword(Math.random().toString(36).slice(-8) + "google!");
+      userId = await db.transaction(async (tx) => {
+        const [row] = await tx.insert(users).values({
+          name,
+          email,
+          passwordHash,
+          baseRole: "user",
+          publicId: await nextUserPublicId("user")
+        }).returning({ id: users.id });
+        await tx.insert(subscriptions).values({
+          userId: row.id,
+          status: "canceled",
+          premiumUntil: /* @__PURE__ */ new Date(0)
+        });
+        await tx.insert(wallets).values({
+          userId: row.id,
+          balance: 0
+        });
+        const [freePlan] = await tx.select().from(subscriptionPlans).where(eq(subscriptionPlans.tier, "free")).limit(1);
+        if (freePlan) {
+          await tx.insert(userSubscriptions).values({
+            userId: row.id,
+            planId: freePlan.id,
+            status: "active",
+            currentPeriodStart: /* @__PURE__ */ new Date(),
+            currentPeriodEnd: new Date((/* @__PURE__ */ new Date()).setFullYear((/* @__PURE__ */ new Date()).getFullYear() + 10))
+          });
+        }
+        return row.id;
+      });
+      isNewUser = true;
+    }
+    const authUser = await loadAuthUser(userId);
+    if (!authUser) {
+      res.status(403).json({ error: "Account restricted." });
+      return;
+    }
+    const jwtToken = await signToken(authUser);
+    res.status(isNewUser ? 201 : 200).json({ token: jwtToken, user: authUser });
+  } catch (error) {
+    console.error("Google Auth Error:", error);
+    res.status(401).json({ error: "Google authentication failed" });
+  }
 });
 router2.get("/me", authMiddleware, requireAuth, async (req, res) => {
   const fresh = await loadAuthUser(req.auth.userId);
@@ -35357,14 +35584,6 @@ async function recordLifecycleEvent(input) {
 
 // src/routes/books.ts
 var router4 = Router4();
-var patchSchema = external_exports.object({
-  title: external_exports.string().min(1).optional(),
-  condition: external_exports.enum(["new", "good", "fair"]).optional(),
-  status: external_exports.enum(["available", "checked_out", "reserved", "unavailable", "sold"]).optional()
-});
-var hubPurchaseBodySchema = external_exports.object({
-  acquireForHubId: external_exports.string().uuid().optional()
-});
 router4.post("/:bookId/checkout", authMiddleware, requireAuth, async (req, res) => {
   await reconcileOverdueBooks();
   const auth = req.auth;
@@ -35777,7 +35996,7 @@ router4.patch("/:bookId", authMiddleware, requireAuth, async (req, res) => {
     res.status(400).json({ error: "Missing book" });
     return;
   }
-  const parsed = patchSchema.safeParse(req.body);
+  const parsed = patchBookSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid body" });
     return;
@@ -36194,7 +36413,7 @@ var createSchema = external_exports.object({
   bookTitle: external_exports.string().max(500, "Book title must be at most 500 characters").transform((s) => s.trim()).refine((s) => s.length > 0, { message: "Book title is required" }),
   notes: external_exports.string().max(2e3).optional()
 });
-var patchSchema2 = external_exports.object({
+var patchSchema = external_exports.object({
   status: external_exports.enum(["routed", "ready", "picked"]).optional(),
   assignmentVerified: external_exports.boolean().optional()
 });
@@ -36633,7 +36852,7 @@ router5.patch("/:id", authMiddleware, requireAuth, async (req, res) => {
     res.status(400).json({ error: "Missing id" });
     return;
   }
-  const parsed = patchSchema2.safeParse(req.body);
+  const parsed = patchSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({
       error: "Invalid body. Hub staff may advance: routed, ready (after a copy is fulfilled), or picked."
@@ -36891,7 +37110,7 @@ var createSchema2 = external_exports.object({
 var p2pBuyBodySchema = external_exports.object({
   acquireForHubId: external_exports.string().uuid().optional()
 });
-var patchSchema3 = external_exports.object({
+var patchSchema2 = external_exports.object({
   bookTitle: external_exports.string().min(1).optional(),
   price: external_exports.number().int().min(1).optional(),
   borrowPrice: external_exports.number().int().min(0).optional(),
@@ -36958,7 +37177,7 @@ router7.patch("/listings/:id", authMiddleware, requireAuth, async (req, res) => 
     res.status(400).json({ error: "Missing id" });
     return;
   }
-  const parsed = patchSchema3.safeParse(req.body);
+  const parsed = patchSchema2.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid body" });
     return;
@@ -39206,6 +39425,144 @@ router8.get("/desk-p2p-listings", authMiddleware, requireAuth, async (req, res) 
   const pipeline = listingRows.filter((l) => !withPhysicalCopy.has(l.id));
   res.json({ listings: pipeline });
 });
+router8.get("/telemetry", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  if (!auth.hubStaffHubIds || auth.hubStaffHubIds.length === 0) {
+    res.status(403).json({ error: "Not hub staff" });
+    return;
+  }
+  res.json({ violations: [] });
+});
+router8.get("/zones", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  if (!auth.hubStaffHubIds || auth.hubStaffHubIds.length === 0) {
+    res.status(403).json({ error: "Not hub staff" });
+    return;
+  }
+  const zones = [
+    { id: "zone_1", name: "Computer Science", type: "shelf", x: 20, y: 30, width: 25, height: 15, aisle: "A", status: "idle", details: "CS, AI, Systems" },
+    { id: "zone_2", name: "Mechanical & Civil", type: "shelf", x: 50, y: 30, width: 25, height: 15, aisle: "B", status: "idle", details: "Core Engineering" },
+    { id: "zone_3", name: "Kiosk Desk 1", type: "kiosk", x: 10, y: 70, width: 12, height: 12, status: "busy", details: "Checkout & Returns" },
+    { id: "zone_4", name: "RFID Exit Gate", type: "gate", x: 80, y: 70, width: 8, height: 20, status: "idle", details: "Security Telemetry" }
+  ];
+  res.json({ zones });
+});
+router8.get("/students", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  if (auth.hubStaffHubIds.length === 0) {
+    res.status(403).json({ error: "Hub staff access required." });
+    return;
+  }
+  const hubId = typeof req.query["hubId"] === "string" ? req.query["hubId"] : auth.hubStaffHubIds[0];
+  if (!auth.hubStaffHubIds.includes(hubId) && auth.baseRole !== "super_admin") {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+    const studentMemberships = await db.select({
+      user: users,
+      wallet: wallets,
+      subscription: userSubscriptions,
+      plan: subscriptionPlans
+    }).from(memberships).where(and(eq(memberships.hubId, hubId), eq(memberships.role, "student"))).innerJoin(users, eq(users.id, memberships.userId)).leftJoin(wallets, eq(wallets.userId, users.id)).leftJoin(userSubscriptions, eq(userSubscriptions.userId, users.id)).leftJoin(subscriptionPlans, eq(subscriptionPlans.id, userSubscriptions.planId)).limit(limit).offset(offset);
+    const result = await Promise.all(studentMemberships.map(async (row) => {
+      let earned = 0;
+      let spent = 0;
+      if (row.wallet) {
+        const txs = await db.select().from(walletTransactions).where(eq(walletTransactions.walletId, row.wallet.id));
+        txs.forEach((t) => {
+          if (t.type === "credit") earned += t.amount;
+          if (t.type === "debit") spent += t.amount;
+        });
+      }
+      const [lastEvt] = await db.select().from(lifecycleEvents).where(eq(lifecycleEvents.userId, row.user.id)).orderBy(sql`created_at DESC`).limit(1);
+      return {
+        id: row.user.id,
+        publicId: row.user.publicId,
+        name: row.user.name,
+        email: row.user.email,
+        phone: row.user.phone,
+        accountStatus: row.user.accountStatus,
+        createdAt: row.user.createdAt,
+        walletBalance: row.wallet?.balance || 0,
+        creditsEarned: earned,
+        creditsSpent: spent,
+        subscriptionStatus: row.subscription?.status || "none",
+        subscriptionPlan: row.plan?.name || "Free",
+        lastActivityDate: lastEvt?.createdAt || row.user.createdAt
+      };
+    }));
+    const [{ count: total }] = await db.select({ count: sql`count(*)`.mapWith(Number) }).from(memberships).where(and(eq(memberships.hubId, hubId), eq(memberships.role, "student")));
+    res.json({
+      students: result,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    logger.error({ error, hubId }, "Error fetching hub students");
+    res.status(500).json({ error: "Failed to fetch students" });
+  }
+});
+router8.get("/students/analytics", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  if (auth.hubStaffHubIds.length === 0) {
+    res.status(403).json({ error: "Hub staff access required." });
+    return;
+  }
+  const hubId = typeof req.query["hubId"] === "string" ? req.query["hubId"] : auth.hubStaffHubIds[0];
+  if (!auth.hubStaffHubIds.includes(hubId) && auth.baseRole !== "super_admin") {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  try {
+    const studentMemberships = await db.select({
+      user: users,
+      wallet: wallets,
+      subscription: userSubscriptions,
+      plan: subscriptionPlans
+    }).from(memberships).where(and(eq(memberships.hubId, hubId), eq(memberships.role, "student"))).innerJoin(users, eq(users.id, memberships.userId)).leftJoin(wallets, eq(wallets.userId, users.id)).leftJoin(userSubscriptions, eq(userSubscriptions.userId, users.id)).leftJoin(subscriptionPlans, eq(subscriptionPlans.id, userSubscriptions.planId));
+    let totalStudents = studentMemberships.length;
+    let activeSubscriptions = 0;
+    let expiredSubscriptions = 0;
+    let totalCreditsIssued = 0;
+    let totalCreditsRedeemed = 0;
+    for (const row of studentMemberships) {
+      if (row.subscription?.status === "active") activeSubscriptions++;
+      if (row.subscription?.status === "canceled" && row.subscription?.premiumUntil && new Date(row.subscription.premiumUntil) < /* @__PURE__ */ new Date()) {
+        expiredSubscriptions++;
+      }
+      if (row.wallet) {
+        const txs = await db.select().from(walletTransactions).where(eq(walletTransactions.walletId, row.wallet.id));
+        txs.forEach((t) => {
+          if (t.type === "credit") totalCreditsIssued += t.amount;
+          if (t.type === "debit") totalCreditsRedeemed += t.amount;
+        });
+      }
+    }
+    res.json({
+      totalStudents,
+      activeSubscriptions,
+      expiredSubscriptions,
+      totalCreditsIssued,
+      totalCreditsRedeemed,
+      walletActivityTrends: {
+        issued: totalCreditsIssued,
+        redeemed: totalCreditsRedeemed,
+        net: totalCreditsIssued - totalCreditsRedeemed
+      }
+    });
+  } catch (error) {
+    logger.error({ error, hubId }, "Error fetching hub student analytics");
+    res.status(500).json({ error: "Failed to fetch student analytics" });
+  }
+});
 var hub_default = router8;
 
 // src/routes/activity.ts
@@ -39378,71 +39735,6 @@ router9.post("/queries", authMiddleware, requireAuth, (req, res) => {
   res.status(202).json({ ok: true, message: "Query recorded" });
 });
 var activity_default = router9;
-
-// src/lib/book-cover-storage.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
-import fs3 from "node:fs/promises";
-import path4 from "node:path";
-var PLACEHOLDER_BOOK_COVER_NAME = "Book_Placeholder.jpg";
-function getPlaceholderBookCoverPublicUrl() {
-  if (!supabaseBookStorageConfigured()) {
-    return "/book_placeholder.webp";
-  }
-  const bucket = process.env["SUPABASE_BOOK_IMAGES_BUCKET"].trim();
-  const prefix = process.env["SUPABASE_BOOK_IMAGES_PREFIX"]?.trim();
-  const storagePath = prefix ? `${prefix.replace(/\/$/, "")}/${PLACEHOLDER_BOOK_COVER_NAME}` : PLACEHOLDER_BOOK_COVER_NAME;
-  const supabase = getSupabaseAdmin2();
-  const { data } = supabase.storage.from(bucket).getPublicUrl(storagePath);
-  return data.publicUrl;
-}
-var extMap2 = {
-  "image/jpeg": ".jpg",
-  "image/png": ".png",
-  "image/webp": ".webp",
-  "image/gif": ".gif"
-};
-function extensionForMimetype2(mimetype) {
-  return extMap2[mimetype] ?? ".img";
-}
-function supabaseBookStorageConfigured() {
-  return Boolean(
-    process.env["SUPABASE_URL"]?.trim() && process.env["SUPABASE_SERVICE_ROLE_KEY"]?.trim() && process.env["SUPABASE_BOOK_IMAGES_BUCKET"]?.trim()
-  );
-}
-var supabaseClient2 = null;
-function getSupabaseAdmin2() {
-  if (supabaseClient2) return supabaseClient2;
-  const url = process.env["SUPABASE_URL"].trim();
-  const key = process.env["SUPABASE_SERVICE_ROLE_KEY"].trim();
-  supabaseClient2 = createClient(url, key, {
-    auth: { persistSession: false, autoRefreshToken: false }
-  });
-  return supabaseClient2;
-}
-async function saveBookCoverImage(opts) {
-  const ext = extensionForMimetype2(opts.mimetype);
-  const objectName = `${randomUUID2()}${ext}`;
-  if (supabaseBookStorageConfigured()) {
-    const bucket = process.env["SUPABASE_BOOK_IMAGES_BUCKET"].trim();
-    const prefix = process.env["SUPABASE_BOOK_IMAGES_PREFIX"]?.trim();
-    const storagePath = prefix ? `${prefix.replace(/\/$/, "")}/${objectName}` : objectName;
-    const supabase = getSupabaseAdmin2();
-    const { error } = await supabase.storage.from(bucket).upload(storagePath, opts.buffer, {
-      contentType: opts.mimetype,
-      upsert: false
-    });
-    if (error) {
-      logger.error({ err: error, bucket, storagePath }, "Supabase storage upload failed");
-      throw new Error(error.message);
-    }
-    const { data } = supabase.storage.from(bucket).getPublicUrl(storagePath);
-    return data.publicUrl;
-  }
-  const dir = ensureUploadDir();
-  const filePath = path4.join(dir, objectName);
-  await fs3.writeFile(filePath, opts.buffer);
-  return `/uploads/${objectName}`;
-}
 
 // src/routes/admin.ts
 import { Router as Router10 } from "express";
@@ -41218,28 +41510,220 @@ router10.post("/books/:id/force-release-reserved", requireSuperAdmin, async (req
 });
 var admin_default = router10;
 
-// src/routes/index.ts
+// src/routes/wallet.ts
+import { Router as Router11 } from "express";
 var router11 = Router11();
-router11.get("/placeholder-book-cover-url", (req, res) => {
+router11.use(authMiddleware, requireAuth);
+router11.get("/balance", async (req, res) => {
+  const [wallet] = await db.select().from(wallets).where(eq(wallets.userId, req.auth.userId)).limit(1);
+  if (!wallet) {
+    res.status(404).json({ error: "Wallet not found" });
+    return;
+  }
+  res.json({ balance: wallet.balance });
+});
+router11.get("/transactions", async (req, res) => {
+  const [wallet] = await db.select().from(wallets).where(eq(wallets.userId, req.auth.userId)).limit(1);
+  if (!wallet) {
+    res.status(404).json({ error: "Wallet not found" });
+    return;
+  }
+  const transactions = await db.select().from(walletTransactions).where(eq(walletTransactions.walletId, wallet.id)).orderBy(desc(walletTransactions.createdAt));
+  res.json({ transactions });
+});
+var debitSchema = external_exports.object({
+  amount: external_exports.number().positive(),
+  description: external_exports.string()
+});
+router11.post("/debit", async (req, res) => {
+  const parsed = debitSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid payload" });
+    return;
+  }
+  const { amount, description } = parsed.data;
+  try {
+    await db.transaction(async (tx) => {
+      const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, req.auth.userId)).limit(1);
+      if (!wallet) throw new Error("Wallet not found");
+      if (wallet.balance < amount) throw new Error("Insufficient funds");
+      await tx.update(wallets).set({ balance: wallet.balance - amount }).where(eq(wallets.id, wallet.id));
+      await tx.insert(walletTransactions).values({
+        walletId: wallet.id,
+        type: "debit",
+        amount,
+        description
+      });
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to debit wallet" });
+  }
+});
+var wallet_default = router11;
+
+// src/routes/subscriptions.ts
+import { Router as Router12 } from "express";
+var router12 = Router12();
+router12.use(authMiddleware, requireAuth);
+router12.get("/plans", async (req, res) => {
+  const plans = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.isActive, 1));
+  res.json({ plans });
+});
+router12.get("/active", async (req, res) => {
+  const [sub] = await db.select({
+    id: userSubscriptions.id,
+    status: userSubscriptions.status,
+    plan: subscriptionPlans.tier
+  }).from(userSubscriptions).innerJoin(subscriptionPlans, eq(userSubscriptions.planId, subscriptionPlans.id)).where(eq(userSubscriptions.userId, req.auth.userId)).limit(1);
+  if (!sub) {
+    res.json({ active: null });
+    return;
+  }
+  res.json({ active: sub });
+});
+var subscribeSchema = external_exports.object({
+  tier: external_exports.string()
+});
+router12.post("/subscribe", async (req, res) => {
+  const parsed = subscribeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid payload" });
+    return;
+  }
+  const { tier } = parsed.data;
+  try {
+    await db.transaction(async (tx) => {
+      const [plan] = await tx.select().from(subscriptionPlans).where(eq(subscriptionPlans.tier, tier)).limit(1);
+      if (!plan) throw new Error("Plan not found");
+      const [existing] = await tx.select().from(userSubscriptions).where(eq(userSubscriptions.userId, req.auth.userId)).limit(1);
+      if (existing) {
+        if (existing.planId === plan.id) {
+          throw new Error("Already subscribed to this plan");
+        }
+        await tx.update(userSubscriptions).set({
+          planId: plan.id,
+          status: "active",
+          updatedAt: /* @__PURE__ */ new Date()
+        }).where(eq(userSubscriptions.id, existing.id));
+      } else {
+        await tx.insert(userSubscriptions).values({
+          userId: req.auth.userId,
+          planId: plan.id,
+          status: "active",
+          currentPeriodStart: /* @__PURE__ */ new Date(),
+          currentPeriodEnd: new Date((/* @__PURE__ */ new Date()).setFullYear((/* @__PURE__ */ new Date()).getFullYear() + (tier === "free" ? 10 : 1)))
+        });
+      }
+      if (plan.creditReward > 0) {
+        const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, req.auth.userId)).limit(1);
+        if (wallet) {
+          await tx.update(wallets).set({ balance: wallet.balance + plan.creditReward }).where(eq(wallets.id, wallet.id));
+          await tx.insert(walletTransactions).values({
+            walletId: wallet.id,
+            type: "credit",
+            amount: plan.creditReward,
+            description: `${plan.name} Subscription Bonus`
+          });
+        }
+      }
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to subscribe" });
+  }
+});
+var subscriptions_default = router12;
+
+// src/lib/book-cover-storage.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+import fs3 from "node:fs/promises";
+import path4 from "node:path";
+var PLACEHOLDER_BOOK_COVER_NAME = "Book_Placeholder.jpg";
+function getPlaceholderBookCoverPublicUrl() {
+  if (!supabaseBookStorageConfigured()) {
+    return "/book_placeholder.webp";
+  }
+  const bucket = process.env["SUPABASE_BOOK_IMAGES_BUCKET"].trim();
+  const prefix = process.env["SUPABASE_BOOK_IMAGES_PREFIX"]?.trim();
+  const storagePath = prefix ? `${prefix.replace(/\/$/, "")}/${PLACEHOLDER_BOOK_COVER_NAME}` : PLACEHOLDER_BOOK_COVER_NAME;
+  const supabase = getSupabaseAdmin2();
+  const { data } = supabase.storage.from(bucket).getPublicUrl(storagePath);
+  return data.publicUrl;
+}
+var extMap2 = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif"
+};
+function extensionForMimetype2(mimetype) {
+  return extMap2[mimetype] ?? ".img";
+}
+function supabaseBookStorageConfigured() {
+  return Boolean(
+    process.env["SUPABASE_URL"]?.trim() && process.env["SUPABASE_SERVICE_ROLE_KEY"]?.trim() && process.env["SUPABASE_BOOK_IMAGES_BUCKET"]?.trim()
+  );
+}
+var supabaseClient2 = null;
+function getSupabaseAdmin2() {
+  if (supabaseClient2) return supabaseClient2;
+  const url = process.env["SUPABASE_URL"].trim();
+  const key = process.env["SUPABASE_SERVICE_ROLE_KEY"].trim();
+  supabaseClient2 = createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
+  return supabaseClient2;
+}
+async function saveBookCoverImage(opts) {
+  const ext = extensionForMimetype2(opts.mimetype);
+  const objectName = `${randomUUID2()}${ext}`;
+  if (supabaseBookStorageConfigured()) {
+    const bucket = process.env["SUPABASE_BOOK_IMAGES_BUCKET"].trim();
+    const prefix = process.env["SUPABASE_BOOK_IMAGES_PREFIX"]?.trim();
+    const storagePath = prefix ? `${prefix.replace(/\/$/, "")}/${objectName}` : objectName;
+    const supabase = getSupabaseAdmin2();
+    const { error } = await supabase.storage.from(bucket).upload(storagePath, opts.buffer, {
+      contentType: opts.mimetype,
+      upsert: false
+    });
+    if (error) {
+      logger.error({ err: error, bucket, storagePath }, "Supabase storage upload failed");
+      throw new Error(error.message);
+    }
+    const { data } = supabase.storage.from(bucket).getPublicUrl(storagePath);
+    return data.publicUrl;
+  }
+  const dir = ensureUploadDir();
+  const filePath = path4.join(dir, objectName);
+  await fs3.writeFile(filePath, opts.buffer);
+  return `/uploads/${objectName}`;
+}
+
+// src/routes/index.ts
+var router13 = Router13();
+router13.get("/placeholder-book-cover-url", (req, res) => {
   res.json({ url: getPlaceholderBookCoverPublicUrl() });
 });
-router11.use(health_default);
-router11.use("/auth", auth_default);
-router11.use("/catalog", catalog_default);
-router11.use("/p2p", p2p_default);
-router11.use(requireAuth);
-router11.use("/books", books_default);
-router11.use("/book-requests", book_requests_default);
-router11.use("/notifications", notifications_default);
-router11.use("/hub", hub_default);
-router11.use("/activity", activity_default);
-router11.use("/admin", admin_default);
-var routes_default = router11;
+router13.use(health_default);
+router13.use("/auth", auth_default);
+router13.use("/catalog", catalog_default);
+router13.use("/p2p", p2p_default);
+router13.use(requireAuth);
+router13.use("/books", books_default);
+router13.use("/book-requests", book_requests_default);
+router13.use("/notifications", notifications_default);
+router13.use("/hub", hub_default);
+router13.use("/activity", activity_default);
+router13.use("/admin", admin_default);
+router13.use("/wallet", wallet_default);
+router13.use("/subscriptions", subscriptions_default);
+var routes_default = router13;
 
 // src/routes/uploads.ts
-import { Router as Router12 } from "express";
+import { Router as Router14 } from "express";
 import multer from "multer";
-var router12 = Router12();
+var router14 = Router14();
 var allowed = /* @__PURE__ */ new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 var upload = multer({
   storage: multer.memoryStorage(),
@@ -41252,7 +41736,7 @@ var upload = multer({
     cb(new Error("Only JPEG, PNG, WebP, or GIF images are allowed."));
   }
 });
-router12.post("/book-cover", requireAuth, (req, res) => {
+router14.post("/book-cover", requireAuth, (req, res) => {
   upload.single("image")(req, res, (err) => {
     void (async () => {
       if (err) {
@@ -41278,7 +41762,7 @@ router12.post("/book-cover", requireAuth, (req, res) => {
     })();
   });
 });
-router12.post("/profile-image", requireAuth, (req, res) => {
+router14.post("/profile-image", requireAuth, (req, res) => {
   upload.single("image")(req, res, (err) => {
     void (async () => {
       if (err) {
@@ -41310,7 +41794,7 @@ router12.post("/profile-image", requireAuth, (req, res) => {
     })();
   });
 });
-var uploads_default = router12;
+var uploads_default = router14;
 
 // src/middleware/api-rate-limit.ts
 var buckets = /* @__PURE__ */ new Map();
@@ -41505,6 +41989,8 @@ function parseAllowedOrigins() {
       { kind: "wildcard", scheme: "https", suffix: ".vercel.app" },
       { kind: "exact", origin: "http://localhost:5173" },
       { kind: "exact", origin: "http://localhost:5174" },
+      { kind: "exact", origin: "http://localhost:3000" },
+      { kind: "exact", origin: "http://127.0.0.1:3000" },
       { kind: "exact", origin: BACKEND_ORIGIN }
     ];
   }
@@ -41599,6 +42085,7 @@ app.use(
     }
   })
 );
+app.get("/ping", (_req, res) => res.json({ ping: "pong" }));
 app.get("/", (_req, res) => {
   res.type("application/json").json({ status: "ok", service: "phygital-api" });
 });

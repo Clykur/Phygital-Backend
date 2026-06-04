@@ -15,8 +15,10 @@ import notificationsRouter from "./notifications";
 import p2pRouter from "./p2p";
 import hubRouter from "./hub";
 import activityRouter from "./activity";
-import { getPlaceholderBookCoverPublicUrl } from "../lib/book-cover-storage";
 import adminRouter from "./admin";
+import walletRouter from "./wallet";
+import subscriptionsRouter from "./subscriptions";
+import { getPlaceholderBookCoverPublicUrl } from "../lib/book-cover-storage";
 import { requireAuth } from "../middleware/auth";
 
 const router: IRouter = Router();
@@ -39,4 +41,6 @@ router.use("/notifications", notificationsRouter);
 router.use("/hub", hubRouter);
 router.use("/activity", activityRouter);
 router.use("/admin", adminRouter);
+router.use("/wallet", walletRouter);
+router.use("/subscriptions", subscriptionsRouter);
 export default router;

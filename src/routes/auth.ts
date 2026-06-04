@@ -2,54 +2,16 @@ import { Router, type IRouter } from "express";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@workspace/db";
-import { hubs, memberships, subscriptions, users } from "@workspace/db/schema";
+import { hubs, memberships, subscriptions, users, wallets, userSubscriptions, subscriptionPlans } from "@workspace/db/schema";
 import { hashPassword, verifyPassword } from "../lib/password";
 import { signToken } from "../lib/jwt";
 import { loadAuthUser } from "../lib/auth-user";
 import { readUserProfileImage } from "../lib/profile-image-storage";
 import { authMiddleware, requireAuth } from "../middleware/auth";
 import { nextHubPublicId, nextUserPublicId } from "../lib/public-ids";
-
-const hubKindSchema = z.enum([
-  "college",
-  "public",
-  "government",
-  "private",
-  "other",
-]);
-
-const registerSchema = z
-  .object({
-    name: z.string().min(1),
-    email: z.string().email(),
-    password: z.string().min(8),
-    accountType: z.enum(["student", "hub"]).optional(),
-    hubName: z.string().optional(),
-    hubLocation: z.string().optional(),
-    hubKind: hubKindSchema.optional(),
-  })
-  .superRefine((data, ctx) => {
-    const t = data.accountType ?? "student";
-    if (t !== "hub") return;
-    if (!data.hubName?.trim()) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Hub name is required", path: ["hubName"] });
-    }
-    if (!data.hubLocation?.trim()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Hub location is required",
-        path: ["hubLocation"],
-      });
-    }
-    if (!data.hubKind) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Hub type is required", path: ["hubKind"] });
-    }
-  });
-
-const loginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1),
-});
+import { OAuth2Client } from "google-auth-library";
+import { loginSchema, registerSchema } from "@workspace/api-zod";
+const googleClient = new OAuth2Client(process.env.VITE_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID);
 
 const router: IRouter = Router();
 
@@ -76,16 +38,39 @@ router.post("/register", async (req, res) => {
           name,
           email,
           passwordHash,
-          baseRole: accountType === "hub" ? "hub" : "user",
-          publicId: await nextUserPublicId(accountType === "hub" ? "hub" : "user"),
+          baseRole: accountType === "super_admin" ? "super_admin" : accountType === "hub" ? "hub" : "user",
+          publicId: await nextUserPublicId(accountType === "super_admin" ? "super_admin" : accountType === "hub" ? "hub" : "user"),
         })
         .returning({ id: users.id });
+      const isPremium = parsed.data.isPremium;
+      const until = new Date();
+      if (isPremium) until.setMonth(until.getMonth() + 12);
+      
       await tx.insert(subscriptions).values({
         userId: row.id,
-        status: "canceled",
-        premiumUntil: new Date(0),
+        status: isPremium ? "active" : "canceled",
+        premiumUntil: isPremium ? until : new Date(0),
       });
-      if (accountType === "hub") {
+
+      // Provision wallet
+      await tx.insert(wallets).values({
+        userId: row.id,
+        balance: 0,
+      });
+
+      // Set default subscription
+      const [freePlan] = await tx.select().from(subscriptionPlans).where(eq(subscriptionPlans.tier, "free")).limit(1);
+      if (freePlan) {
+        await tx.insert(userSubscriptions).values({
+          userId: row.id,
+          planId: freePlan.id,
+          status: "active",
+          currentPeriodStart: new Date(),
+          currentPeriodEnd: new Date(new Date().setFullYear(new Date().getFullYear() + 10)), // far future
+        });
+      }
+
+      if (accountType === "hub" || (accountType === "super_admin" && parsed.data.hubName)) {
         const hubName = parsed.data.hubName!.trim();
         const hubLocation = parsed.data.hubLocation!.trim();
         const hubKind = parsed.data.hubKind!;
@@ -103,6 +88,27 @@ router.post("/register", async (req, res) => {
           hubId: hub.id,
           role: "hub_admin",
         });
+      } else if (accountType === "student" && parsed.data.hubLocation) {
+        const hubLoc = parsed.data.hubLocation!.trim();
+        // Try to find the hub by publicId or location
+        const [hub] = await tx.select().from(hubs).where(eq(hubs.publicId, hubLoc)).limit(1);
+        if (hub) {
+          await tx.insert(memberships).values({
+            userId: row.id,
+            hubId: hub.id,
+            role: "student",
+          });
+        } else {
+          // fallback search by location
+          const [hubByLoc] = await tx.select().from(hubs).where(eq(hubs.location, hubLoc)).limit(1);
+          if (hubByLoc) {
+            await tx.insert(memberships).values({
+              userId: row.id,
+              hubId: hubByLoc.id,
+              role: "student",
+            });
+          }
+        }
       }
       return row.id;
     });
@@ -143,6 +149,89 @@ router.post("/login", async (req, res) => {
   }
   const token = await signToken(authUser);
   res.json({ token, user: authUser });
+});
+
+router.post("/google", async (req, res) => {
+  const { token } = req.body;
+  if (!token) {
+    res.status(400).json({ error: "Missing Google token" });
+    return;
+  }
+
+  try {
+    const ticket = await googleClient.verifyIdToken({
+      idToken: token,
+      audience: process.env.VITE_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    if (!payload || !payload.email) {
+      res.status(400).json({ error: "Invalid Google payload" });
+      return;
+    }
+
+    const email = payload.email;
+    const name = payload.name || email.split('@')[0];
+
+    let [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+
+    let userId = user?.id;
+    let isNewUser = false;
+
+    if (!user) {
+      // Register new user automatically via Google
+      const passwordHash = await hashPassword(Math.random().toString(36).slice(-8) + "google!");
+      userId = await db.transaction(async (tx) => {
+        const [row] = await tx
+          .insert(users)
+          .values({
+            name,
+            email,
+            passwordHash,
+            baseRole: "user",
+            publicId: await nextUserPublicId("user"),
+          })
+          .returning({ id: users.id });
+        await tx.insert(subscriptions).values({
+          userId: row.id,
+          status: "canceled",
+          premiumUntil: new Date(0),
+        });
+
+        // Provision wallet
+        await tx.insert(wallets).values({
+          userId: row.id,
+          balance: 0,
+        });
+
+        // Set default subscription
+        const [freePlan] = await tx.select().from(subscriptionPlans).where(eq(subscriptionPlans.tier, "free")).limit(1);
+        if (freePlan) {
+          await tx.insert(userSubscriptions).values({
+            userId: row.id,
+            planId: freePlan.id,
+            status: "active",
+            currentPeriodStart: new Date(),
+            currentPeriodEnd: new Date(new Date().setFullYear(new Date().getFullYear() + 10)),
+          });
+        }
+
+        return row.id;
+      });
+      isNewUser = true;
+    }
+
+    const authUser = await loadAuthUser(userId!);
+    if (!authUser) {
+      res.status(403).json({ error: "Account restricted." });
+      return;
+    }
+
+    const jwtToken = await signToken(authUser);
+    res.status(isNewUser ? 201 : 200).json({ token: jwtToken, user: authUser });
+  } catch (error) {
+    console.error("Google Auth Error:", error);
+    res.status(401).json({ error: "Google authentication failed" });
+  }
 });
 
 router.get("/me", authMiddleware, requireAuth, async (req, res) => {
