@@ -58,5 +58,8 @@ export async function loadAuthUser(userId: string): Promise<AuthUser | null> {
     hubStaffHubIds,
     hubMemberships,
     profileImageUpdatedAt: user.avatarUpdatedAt?.toISOString() ?? null,
+    phone: user.phone ?? null,
+    accountStatus: user.accountStatus,
+    createdAt: user.createdAt.toISOString(),
   };
 }

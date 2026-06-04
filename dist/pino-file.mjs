@@ -4110,7 +4110,7 @@ var require_pino = __commonJS({
     function pinoBundlerAbsolutePath(p) {
       try {
         const path = __require("path");
-        const outputDir = "/Users/chandukalluru/Desktop/phygital-backend/dist";
+        const outputDir = "/Users/karthiknaramala/Desktop/Phygital-Backend/dist";
         return path.resolve(outputDir, p.replace(/^\.\//, ""));
       } catch (e) {
         const f = new Function("p", "return new URL(p, import.meta.url).pathname");

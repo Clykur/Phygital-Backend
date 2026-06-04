@@ -93,6 +93,7 @@ const external = [
   "dotenv",
   "pino",
   "pino-http",
+  "google-auth-library",
 ];
 
 function buildOptions(distDir) {

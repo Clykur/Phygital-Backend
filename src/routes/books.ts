@@ -21,18 +21,9 @@ import {
 import { notifyUser } from "../lib/in-app-notifications";
 import type { DbClient } from "../lib/hub-guards";
 import { recordLifecycleEvent } from "../lib/lifecycle-events";
+import { patchBookSchema, hubPurchaseBodySchema } from "@workspace/api-zod";
 
 const router: IRouter = Router();
-
-const patchSchema = z.object({
-  title: z.string().min(1).optional(),
-  condition: z.enum(["new", "good", "fair"]).optional(),
-  status: z.enum(["available", "checked_out", "reserved", "unavailable", "sold"]).optional(),
-});
-
-const hubPurchaseBodySchema = z.object({
-  acquireForHubId: z.string().uuid().optional(),
-});
 
 router.post("/:bookId/checkout", authMiddleware, requireAuth, async (req, res) => {
   await reconcileOverdueBooks();
@@ -473,7 +464,7 @@ router.patch("/:bookId", authMiddleware, requireAuth, async (req, res) => {
     res.status(400).json({ error: "Missing book" });
     return;
   }
-  const parsed = patchSchema.safeParse(req.body);
+  const parsed = patchBookSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid body" });
     return;

@@ -19,6 +19,9 @@ export type AuthUser = {
   hubMemberships: HubMembership[];
   /** Set when a profile photo exists; use for cache-busting authenticated image fetch. */
   profileImageUpdatedAt: string | null;
+  phone: string | null;
+  accountStatus: string;
+  createdAt: string;
 };
 
 export type RbacResource =
