@@ -10,7 +10,7 @@ import {
   p2pListings,
   subscriptions,
   users,
-} from "@workspace/db/schema";
+ subscriptionPlans } from "@workspace/db/schema";
 import { ACTIONS } from "./lib/rbac/actions";
 import { hashPassword } from "./lib/password";
 import { logger } from "./lib/logger";
@@ -176,7 +176,17 @@ async function ensureMembership(userId: string, hubId: string, role: string) {
 
 export async function seedIfEmpty(): Promise<void> {
   try {
-    const [{ c: hubCount }] = await db.select({ c: count() }).from(hubs);
+
+    const [{ c: planCount }] = await db.select({ c: count() }).from(subscriptionPlans);
+    if (Number(planCount) === 0) {
+      await db.insert(subscriptionPlans).values([
+        { tier: 'free', name: 'Student Free', target: 'student', price: 0, creditReward: 0, isActive: 1 },
+        { tier: 'pro', name: 'Student Premium', target: 'student', price: 299, creditReward: 50, isActive: 1 },
+        { tier: 'hub_basic', name: 'Hub Basic', target: 'hub', price: 0, creditReward: 0, isActive: 1 },
+        { tier: 'hub_pro', name: 'Hub Pro', target: 'hub', price: 999, creditReward: 0, isActive: 1 }
+      ]);
+    }
+      const [{ c: hubCount }] = await db.select({ c: count() }).from(hubs);
     let hubList = await db.select().from(hubs).orderBy(asc(hubs.name));
     const createdFreshHubs = Number(hubCount) === 0;
 

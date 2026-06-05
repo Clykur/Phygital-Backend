@@ -27,6 +27,7 @@ import {
   sweepDeskWaitingAssignments,
   tryAssignCopyToWaitingRequests,
 } from "../lib/hub-inventory";
+import { getInventoryStatsForTitles } from "../lib/inventory-stats";
 import { expireAllStaleBookRequests } from "../lib/expire-book-requests";
 import { notifyUser } from "../lib/in-app-notifications";
 import type { DbClient } from "../lib/hub-guards";
@@ -868,7 +869,21 @@ router.get("/books", authMiddleware, requireAuth, async (req, res) => {
     .offset(offset);
 
   const booksPayload = await enrichBooksAcquiredFromHubNames(pageRows);
-  res.json({ books: booksPayload, total, limit, offset });
+
+  const titles = [...new Set(booksPayload.map((b: any) => b.title))].filter(Boolean) as string[];
+  const statsMap = await getInventoryStatsForTitles(null, titles);
+  
+  const payloadWithStats = booksPayload.map((b: any) => ({
+    ...b,
+    inventoryStats: statsMap[`${b.hubId}:${b.title}`] ?? {
+      total: 0,
+      available: 0,
+      issued: 0,
+      reserved: 0,
+    },
+  }));
+
+  res.json({ books: payloadWithStats, total, limit, offset });
 });
 
 router.get("/overview", authMiddleware, requireAuth, async (req, res) => {
@@ -1260,7 +1275,7 @@ router.get("/students/analytics", authMiddleware, requireAuth, async (req, res) 
 
     for (const row of studentMemberships) {
       if (row.subscription?.status === 'active') activeSubscriptions++;
-      if (row.subscription?.status === 'canceled' && row.subscription?.premiumUntil && new Date(row.subscription.premiumUntil) < new Date()) {
+      if (row.subscription?.status === 'canceled' && row.subscription?.currentPeriodEnd && new Date(row.subscription.currentPeriodEnd) < new Date()) {
         expiredSubscriptions++;
       }
       if (row.wallet) {

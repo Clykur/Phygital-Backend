@@ -9,6 +9,7 @@ import { books, hubs } from "@workspace/db/schema";
 import { authMiddleware } from "../middleware/auth";
 import { reconcileOverdueBooks } from "../lib/books-lifecycle";
 import { enrichBooksAcquiredFromHubNames } from "../lib/book-acquired-from";
+import { getInventoryStatsForTitles } from "../lib/inventory-stats";
 
 const router: IRouter = Router();
 
@@ -29,6 +30,20 @@ function fromActiveHubBooks() {
     .innerJoin(hubs, and(eq(books.hubId, hubs.id), eq(hubs.isActive, true)));
 }
 
+async function attachInventoryStats(booksPayload: any[]) {
+  const titles = [...new Set(booksPayload.map((b) => b.title))].filter(Boolean) as string[];
+  const statsMap = await getInventoryStatsForTitles(null, titles);
+  return booksPayload.map((b) => ({
+    ...b,
+    inventoryStats: statsMap[`${b.hubId}:${b.title}`] ?? {
+      total: 0,
+      available: 0,
+      issued: 0,
+      reserved: 0,
+    },
+  }));
+}
+
 router.get("/books", authMiddleware, async (req, res) => {
   await reconcileOverdueBooks();
 
@@ -45,7 +60,7 @@ router.get("/books", authMiddleware, async (req, res) => {
       .where(whereClause)
       .orderBy(desc(books.createdAt), desc(books.id));
     const booksPayload = await enrichBooksAcquiredFromHubNames(rows.map((r) => r.b));
-    res.json({ books: booksPayload });
+    res.json({ books: await attachInventoryStats(booksPayload) });
     return;
   }
 
@@ -54,7 +69,7 @@ router.get("/books", authMiddleware, async (req, res) => {
       .where(and(eq(books.status, "available"), notInterHubTransfer))
       .orderBy(desc(books.createdAt), desc(books.id));
     const booksPayload = await enrichBooksAcquiredFromHubNames(rows.map((r) => r.b));
-    res.json({ books: booksPayload });
+    res.json({ books: await attachInventoryStats(booksPayload) });
     return;
   }
 
@@ -62,7 +77,7 @@ router.get("/books", authMiddleware, async (req, res) => {
     .where(notInterHubTransfer)
     .orderBy(desc(books.createdAt), desc(books.id));
   const booksPayload = await enrichBooksAcquiredFromHubNames(rows.map((r) => r.b));
-  res.json({ books: booksPayload });
+  res.json({ books: await attachInventoryStats(booksPayload) });
 });
 
 router.get("/hubs", authMiddleware, async (_req, res) => {

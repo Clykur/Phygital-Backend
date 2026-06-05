@@ -24160,12 +24160,14 @@ __export(schema_exports, {
   bookRequestHubReassignments: () => bookRequestHubReassignments,
   bookRequests: () => bookRequests,
   books: () => books,
+  hubSubscriptions: () => hubSubscriptions,
   hubs: () => hubs,
   inAppNotifications: () => inAppNotifications,
   lifecycleEvents: () => lifecycleEvents,
   memberships: () => memberships,
   notificationDeliveries: () => notificationDeliveries,
   p2pListings: () => p2pListings,
+  paymentIntents: () => paymentIntents,
   subscriptionPlans: () => subscriptionPlans,
   subscriptions: () => subscriptions,
   userSubscriptions: () => userSubscriptions,
@@ -24382,6 +24384,8 @@ var subscriptionPlans = pgTable("subscription_plans", {
   /** e.g. "free", "pro" */
   tier: text("tier").notNull().unique(),
   name: text("name").notNull(),
+  /** student | hub */
+  target: text("target").notNull().default("student"),
   price: integer("price").notNull(),
   /** How many credits they get when subscribing/renewing */
   creditReward: integer("credit_reward").notNull().default(0),
@@ -24396,6 +24400,33 @@ var userSubscriptions = pgTable("user_subscriptions", {
   status: text("status").notNull().default("active"),
   currentPeriodStart: timestamp("current_period_start", { withTimezone: true }).notNull(),
   currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
+var hubSubscriptions = pgTable("hub_subscriptions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  hubId: uuid("hub_id").notNull().references(() => hubs.id, { onDelete: "cascade" }).unique(),
+  planId: uuid("plan_id").notNull().references(() => subscriptionPlans.id, { onDelete: "restrict" }),
+  /** active | canceled | past_due */
+  status: text("status").notNull().default("active"),
+  currentPeriodStart: timestamp("current_period_start", { withTimezone: true }).notNull(),
+  currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
+var paymentIntents = pgTable("payment_intents", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** Amount in INR cents (e.g. 10000 for 100 INR) */
+  amount: integer("amount").notNull(),
+  currency: text("currency").notNull().default("INR"),
+  /** pending | succeeded | failed */
+  status: text("status").notNull().default("pending"),
+  /** For mock Razorpay order_id / payment_id */
+  providerOrderId: text("provider_order_id"),
+  providerPaymentId: text("provider_payment_id"),
+  /** e.g. { type: 'subscription', planId: '...', hubId?: '...' } */
+  metadata: json("metadata"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
 });
@@ -25820,13 +25851,13 @@ function computePremiumActive(sub) {
   if (!sub) return false;
   if (sub.status === "canceled" || sub.status === "past_due") return false;
   if (sub.status !== "active" && sub.status !== "trial") return false;
-  return sub.premiumUntil.getTime() > Date.now();
+  return sub.currentPeriodEnd.getTime() > Date.now();
 }
 async function loadAuthUser(userId) {
   const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   if (!user) return null;
   if (user.accountStatus !== "active") return null;
-  const [sub] = await db.select().from(subscriptions).where(eq(subscriptions.userId, userId)).limit(1);
+  const [sub] = await db.select().from(userSubscriptions).where(eq(userSubscriptions.userId, userId)).limit(1);
   const mems = await db.select().from(memberships).where(eq(memberships.userId, userId));
   const staffMems = mems.filter((m) => isHubStaffRole(m.role));
   let hubStaffHubIds = [...new Set(staffMems.map((m) => m.hubId))];
@@ -25844,7 +25875,7 @@ async function loadAuthUser(userId) {
       }
     }
   }
-  const premiumUntil = sub && sub.premiumUntil.getTime() > 1 ? sub.premiumUntil.toISOString() : null;
+  const premiumUntil = sub && sub.currentPeriodEnd.getTime() > 1 ? sub.currentPeriodEnd.toISOString() : null;
   const subscriptionPremium = computePremiumActive(sub);
   const premiumActive = user.baseRole === "super_admin" || subscriptionPremium;
   return {
@@ -34876,7 +34907,7 @@ router2.post("/login", async (req, res) => {
   res.json({ token, user: authUser });
 });
 router2.post("/google", async (req, res) => {
-  const { token } = req.body;
+  const { token, accountType, hubLocation, hubName, hubKind } = req.body;
   if (!token) {
     res.status(400).json({ error: "Missing Google token" });
     return;
@@ -34898,13 +34929,14 @@ router2.post("/google", async (req, res) => {
     let isNewUser = false;
     if (!user) {
       const passwordHash = await hashPassword(Math.random().toString(36).slice(-8) + "google!");
+      const actualAccountType = accountType || "user";
       userId = await db.transaction(async (tx) => {
         const [row] = await tx.insert(users).values({
           name,
           email,
           passwordHash,
-          baseRole: "user",
-          publicId: await nextUserPublicId("user")
+          baseRole: actualAccountType === "super_admin" ? "super_admin" : actualAccountType === "hub" ? "hub" : "user",
+          publicId: await nextUserPublicId(actualAccountType === "super_admin" ? "super_admin" : actualAccountType === "hub" ? "hub" : "user")
         }).returning({ id: users.id });
         await tx.insert(subscriptions).values({
           userId: row.id,
@@ -34924,6 +34956,35 @@ router2.post("/google", async (req, res) => {
             currentPeriodStart: /* @__PURE__ */ new Date(),
             currentPeriodEnd: new Date((/* @__PURE__ */ new Date()).setFullYear((/* @__PURE__ */ new Date()).getFullYear() + 10))
           });
+        }
+        if (actualAccountType === "hub" || actualAccountType === "super_admin" && hubName) {
+          const hName = hubName?.trim() || name;
+          const hLocation = hubLocation?.trim() || "Unknown";
+          const hKind = hubKind || "college";
+          const [hub] = await tx.insert(hubs).values({
+            name: hName,
+            location: hLocation,
+            kind: hKind,
+            publicId: await nextHubPublicId()
+          }).returning({ id: hubs.id });
+          await tx.insert(memberships).values({
+            userId: row.id,
+            hubId: hub.id,
+            role: "hub_admin"
+          });
+        } else if (actualAccountType === "student" && hubLocation) {
+          const hubLoc = hubLocation.trim();
+          let [hub] = await tx.select().from(hubs).where(eq(hubs.publicId, hubLoc)).limit(1);
+          if (!hub) {
+            [hub] = await tx.select().from(hubs).where(eq(hubs.location, hubLoc)).limit(1);
+          }
+          if (hub) {
+            await tx.insert(memberships).values({
+              userId: row.id,
+              hubId: hub.id,
+              role: "student"
+            });
+          }
         }
         return row.id;
       });
@@ -35035,6 +35096,45 @@ async function enrichBooksAcquiredFromHubNames(list) {
   }));
 }
 
+// src/lib/inventory-stats.ts
+async function getInventoryStatsForTitles(hubId, titles) {
+  if (titles.length === 0) return {};
+  const conditions = [];
+  if (hubId) {
+    conditions.push(eq(books.hubId, hubId));
+  }
+  conditions.push(inArray(books.title, titles));
+  const rows = await db.select({
+    title: books.title,
+    status: books.status,
+    hubId: books.hubId,
+    n: count()
+  }).from(books).where(and(...conditions)).groupBy(books.title, books.hubId, books.status);
+  const statsMap = {};
+  for (const row of rows) {
+    const key = hubId ? row.title : `${row.hubId}:${row.title}`;
+    if (!statsMap[key]) {
+      statsMap[key] = {
+        total: 0,
+        available: 0,
+        issued: 0,
+        reserved: 0
+      };
+    }
+    const stat = statsMap[key];
+    const n = Number(row.n);
+    stat.total += n;
+    if (row.status === "available") {
+      stat.available += n;
+    } else if (row.status === "reserved") {
+      stat.reserved += n;
+    } else if (row.status === "checked_out" || row.status === "overdue") {
+      stat.issued += n;
+    }
+  }
+  return statsMap;
+}
+
 // src/routes/catalog.ts
 var router3 = Router3();
 function escapeIlikePattern(s) {
@@ -35045,6 +35145,19 @@ var notInterHubTransfer = notInArray(books.status, [...EXCLUDE_FROM_PUBLIC_CATAL
 function fromActiveHubBooks() {
   return db.select({ b: books }).from(books).innerJoin(hubs, and(eq(books.hubId, hubs.id), eq(hubs.isActive, true)));
 }
+async function attachInventoryStats(booksPayload) {
+  const titles = [...new Set(booksPayload.map((b) => b.title))].filter(Boolean);
+  const statsMap = await getInventoryStatsForTitles(null, titles);
+  return booksPayload.map((b) => ({
+    ...b,
+    inventoryStats: statsMap[`${b.hubId}:${b.title}`] ?? {
+      total: 0,
+      available: 0,
+      issued: 0,
+      reserved: 0
+    }
+  }));
+}
 router3.get("/books", authMiddleware, async (req, res) => {
   await reconcileOverdueBooks();
   const rawQ = typeof req.query["q"] === "string" ? req.query["q"].trim() : "";
@@ -35054,18 +35167,18 @@ router3.get("/books", authMiddleware, async (req, res) => {
     const whereClause = availableOnly ? and(ilike(books.title, pattern), eq(books.status, "available"), notInterHubTransfer) : and(ilike(books.title, pattern), notInterHubTransfer);
     const rows2 = await fromActiveHubBooks().where(whereClause).orderBy(desc(books.createdAt), desc(books.id));
     const booksPayload2 = await enrichBooksAcquiredFromHubNames(rows2.map((r) => r.b));
-    res.json({ books: booksPayload2 });
+    res.json({ books: await attachInventoryStats(booksPayload2) });
     return;
   }
   if (availableOnly) {
     const rows2 = await fromActiveHubBooks().where(and(eq(books.status, "available"), notInterHubTransfer)).orderBy(desc(books.createdAt), desc(books.id));
     const booksPayload2 = await enrichBooksAcquiredFromHubNames(rows2.map((r) => r.b));
-    res.json({ books: booksPayload2 });
+    res.json({ books: await attachInventoryStats(booksPayload2) });
     return;
   }
   const rows = await fromActiveHubBooks().where(notInterHubTransfer).orderBy(desc(books.createdAt), desc(books.id));
   const booksPayload = await enrichBooksAcquiredFromHubNames(rows.map((r) => r.b));
-  res.json({ books: booksPayload });
+  res.json({ books: await attachInventoryStats(booksPayload) });
 });
 router3.get("/hubs", authMiddleware, async (_req, res) => {
   const rows = await db.select().from(hubs).where(eq(hubs.isActive, true));
@@ -37125,11 +37238,19 @@ router7.get("/listings", authMiddleware, async (_req, res) => {
     buyerBaseRole: users.baseRole,
     refId: books.refId
   }).from(p2pListings).leftJoin(users, eq(p2pListings.buyerId, users.id)).leftJoin(books, eq(books.listingId, p2pListings.id));
+  const titles = [...new Set(rows.map((r) => r.listing.bookTitle))].filter(Boolean);
+  const statsMap = await getInventoryStatsForTitles(null, titles);
   res.json({
     listings: rows.map((r) => ({
       ...r.listing,
       buyerBaseRole: r.buyerBaseRole ?? null,
-      refId: r.refId ?? null
+      refId: r.refId ?? null,
+      inventoryStats: statsMap[`${r.listing.hubId}:${r.listing.bookTitle}`] ?? {
+        total: 0,
+        available: 0,
+        issued: 0,
+        reserved: 0
+      }
     }))
   });
 });
@@ -39244,7 +39365,18 @@ router8.get("/books", authMiddleware, requireAuth, async (req, res) => {
     }
   }).from(books).leftJoin(bookRequest, eq(books.id, bookRequest.assignedCopyId)).where(w).orderBy(...hubInventoryBooksOrderBy).limit(limit).offset(offset);
   const booksPayload = await enrichBooksAcquiredFromHubNames(pageRows);
-  res.json({ books: booksPayload, total, limit, offset });
+  const titles = [...new Set(booksPayload.map((b) => b.title))].filter(Boolean);
+  const statsMap = await getInventoryStatsForTitles(null, titles);
+  const payloadWithStats = booksPayload.map((b) => ({
+    ...b,
+    inventoryStats: statsMap[`${b.hubId}:${b.title}`] ?? {
+      total: 0,
+      available: 0,
+      issued: 0,
+      reserved: 0
+    }
+  }));
+  res.json({ books: payloadWithStats, total, limit, offset });
 });
 router8.get("/overview", authMiddleware, requireAuth, async (req, res) => {
   const auth = req.auth;
@@ -39535,7 +39667,7 @@ router8.get("/students/analytics", authMiddleware, requireAuth, async (req, res)
     let totalCreditsRedeemed = 0;
     for (const row of studentMemberships) {
       if (row.subscription?.status === "active") activeSubscriptions++;
-      if (row.subscription?.status === "canceled" && row.subscription?.premiumUntil && new Date(row.subscription.premiumUntil) < /* @__PURE__ */ new Date()) {
+      if (row.subscription?.status === "canceled" && row.subscription?.currentPeriodEnd && new Date(row.subscription.currentPeriodEnd) < /* @__PURE__ */ new Date()) {
         expiredSubscriptions++;
       }
       if (row.wallet) {
@@ -41515,18 +41647,16 @@ import { Router as Router11 } from "express";
 var router11 = Router11();
 router11.use(authMiddleware, requireAuth);
 router11.get("/balance", async (req, res) => {
-  const [wallet] = await db.select().from(wallets).where(eq(wallets.userId, req.auth.userId)).limit(1);
+  let [wallet] = await db.select().from(wallets).where(eq(wallets.userId, req.auth.userId)).limit(1);
   if (!wallet) {
-    res.status(404).json({ error: "Wallet not found" });
-    return;
+    [wallet] = await db.insert(wallets).values({ userId: req.auth.userId, balance: 0 }).returning();
   }
   res.json({ balance: wallet.balance });
 });
 router11.get("/transactions", async (req, res) => {
-  const [wallet] = await db.select().from(wallets).where(eq(wallets.userId, req.auth.userId)).limit(1);
+  let [wallet] = await db.select().from(wallets).where(eq(wallets.userId, req.auth.userId)).limit(1);
   if (!wallet) {
-    res.status(404).json({ error: "Wallet not found" });
-    return;
+    [wallet] = await db.insert(wallets).values({ userId: req.auth.userId, balance: 0 }).returning();
   }
   const transactions = await db.select().from(walletTransactions).where(eq(walletTransactions.walletId, wallet.id)).orderBy(desc(walletTransactions.createdAt));
   res.json({ transactions });
@@ -41567,14 +41697,17 @@ import { Router as Router12 } from "express";
 var router12 = Router12();
 router12.use(authMiddleware, requireAuth);
 router12.get("/plans", async (req, res) => {
-  const plans = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.isActive, 1));
+  const target = req.query.target === "hub" ? "hub" : "student";
+  const plans = await db.select().from(subscriptionPlans).where(and(eq(subscriptionPlans.isActive, 1), eq(subscriptionPlans.target, target)));
   res.json({ plans });
 });
 router12.get("/active", async (req, res) => {
   const [sub] = await db.select({
     id: userSubscriptions.id,
     status: userSubscriptions.status,
-    plan: subscriptionPlans.tier
+    plan: subscriptionPlans.tier,
+    planName: subscriptionPlans.name,
+    currentPeriodEnd: userSubscriptions.currentPeriodEnd
   }).from(userSubscriptions).innerJoin(subscriptionPlans, eq(userSubscriptions.planId, subscriptionPlans.id)).where(eq(userSubscriptions.userId, req.auth.userId)).limit(1);
   if (!sub) {
     res.json({ active: null });
@@ -41582,55 +41715,119 @@ router12.get("/active", async (req, res) => {
   }
   res.json({ active: sub });
 });
-var subscribeSchema = external_exports.object({
-  tier: external_exports.string()
-});
-router12.post("/subscribe", async (req, res) => {
-  const parsed = subscribeSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Invalid payload" });
+router12.get("/hub-active", async (req, res) => {
+  const hubId = req.query.hubId;
+  if (!hubId) return res.status(400).json({ error: "hubId required" });
+  const [sub] = await db.select({
+    id: hubSubscriptions.id,
+    status: hubSubscriptions.status,
+    plan: subscriptionPlans.tier,
+    planName: subscriptionPlans.name,
+    currentPeriodEnd: hubSubscriptions.currentPeriodEnd
+  }).from(hubSubscriptions).innerJoin(subscriptionPlans, eq(hubSubscriptions.planId, subscriptionPlans.id)).where(eq(hubSubscriptions.hubId, hubId)).limit(1);
+  if (!sub) {
+    res.json({ active: null });
     return;
   }
-  const { tier } = parsed.data;
+  res.json({ active: sub });
+});
+router12.get("/history", async (req, res) => {
+  const history = await db.select().from(paymentIntents).where(eq(paymentIntents.userId, req.auth.userId)).orderBy(desc(paymentIntents.createdAt)).limit(50);
+  res.json({ history });
+});
+var createIntentSchema = external_exports.object({
+  planId: external_exports.string(),
+  hubId: external_exports.string().optional()
+});
+router12.post("/create-intent", async (req, res) => {
+  const parsed = createIntentSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
+  const { planId, hubId } = parsed.data;
+  const [plan] = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, planId)).limit(1);
+  if (!plan) return res.status(404).json({ error: "Plan not found" });
+  const [intent] = await db.insert(paymentIntents).values({
+    userId: req.auth.userId,
+    amount: plan.price * 100,
+    // assume INR cents
+    status: "pending",
+    metadata: { type: "subscription", planId, hubId, target: plan.target }
+  }).returning();
+  res.json({ intentId: intent.id, amount: intent.amount });
+});
+var verifySchema = external_exports.object({
+  intentId: external_exports.string(),
+  status: external_exports.enum(["success", "failure"])
+});
+router12.post("/verify", async (req, res) => {
+  const parsed = verifySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
+  const { intentId, status } = parsed.data;
   try {
     await db.transaction(async (tx) => {
-      const [plan] = await tx.select().from(subscriptionPlans).where(eq(subscriptionPlans.tier, tier)).limit(1);
-      if (!plan) throw new Error("Plan not found");
-      const [existing] = await tx.select().from(userSubscriptions).where(eq(userSubscriptions.userId, req.auth.userId)).limit(1);
-      if (existing) {
-        if (existing.planId === plan.id) {
-          throw new Error("Already subscribed to this plan");
-        }
-        await tx.update(userSubscriptions).set({
-          planId: plan.id,
-          status: "active",
-          updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq(userSubscriptions.id, existing.id));
-      } else {
-        await tx.insert(userSubscriptions).values({
-          userId: req.auth.userId,
-          planId: plan.id,
-          status: "active",
-          currentPeriodStart: /* @__PURE__ */ new Date(),
-          currentPeriodEnd: new Date((/* @__PURE__ */ new Date()).setFullYear((/* @__PURE__ */ new Date()).getFullYear() + (tier === "free" ? 10 : 1)))
-        });
+      const [intent] = await tx.select().from(paymentIntents).where(eq(paymentIntents.id, intentId)).limit(1);
+      if (!intent) throw new Error("Intent not found");
+      if (intent.status !== "pending") throw new Error("Intent already processed");
+      if (status === "failure") {
+        await tx.update(paymentIntents).set({ status: "failed", updatedAt: /* @__PURE__ */ new Date() }).where(eq(paymentIntents.id, intentId));
+        return;
       }
-      if (plan.creditReward > 0) {
-        const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, req.auth.userId)).limit(1);
-        if (wallet) {
-          await tx.update(wallets).set({ balance: wallet.balance + plan.creditReward }).where(eq(wallets.id, wallet.id));
-          await tx.insert(walletTransactions).values({
-            walletId: wallet.id,
-            type: "credit",
-            amount: plan.creditReward,
-            description: `${plan.name} Subscription Bonus`
+      await tx.update(paymentIntents).set({ status: "succeeded", updatedAt: /* @__PURE__ */ new Date() }).where(eq(paymentIntents.id, intentId));
+      const meta = intent.metadata;
+      const [plan] = await tx.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, meta.planId)).limit(1);
+      if (!plan) throw new Error("Plan not found");
+      if (meta.target === "hub" && meta.hubId) {
+        const [existingHubSub] = await tx.select().from(hubSubscriptions).where(eq(hubSubscriptions.hubId, meta.hubId)).limit(1);
+        if (existingHubSub) {
+          await tx.update(hubSubscriptions).set({
+            planId: plan.id,
+            status: "active",
+            updatedAt: /* @__PURE__ */ new Date(),
+            currentPeriodEnd: new Date((/* @__PURE__ */ new Date()).setFullYear((/* @__PURE__ */ new Date()).getFullYear() + 1))
+          }).where(eq(hubSubscriptions.id, existingHubSub.id));
+        } else {
+          await tx.insert(hubSubscriptions).values({
+            hubId: meta.hubId,
+            planId: plan.id,
+            status: "active",
+            currentPeriodStart: /* @__PURE__ */ new Date(),
+            currentPeriodEnd: new Date((/* @__PURE__ */ new Date()).setFullYear((/* @__PURE__ */ new Date()).getFullYear() + 1))
           });
+        }
+      } else {
+        const [existingUserSub] = await tx.select().from(userSubscriptions).where(eq(userSubscriptions.userId, req.auth.userId)).limit(1);
+        if (existingUserSub) {
+          await tx.update(userSubscriptions).set({
+            planId: plan.id,
+            status: "active",
+            updatedAt: /* @__PURE__ */ new Date(),
+            currentPeriodEnd: new Date((/* @__PURE__ */ new Date()).setFullYear((/* @__PURE__ */ new Date()).getFullYear() + 1))
+          }).where(eq(userSubscriptions.id, existingUserSub.id));
+        } else {
+          await tx.insert(userSubscriptions).values({
+            userId: req.auth.userId,
+            planId: plan.id,
+            status: "active",
+            currentPeriodStart: /* @__PURE__ */ new Date(),
+            currentPeriodEnd: new Date((/* @__PURE__ */ new Date()).setFullYear((/* @__PURE__ */ new Date()).getFullYear() + 1))
+          });
+        }
+        if (plan.creditReward > 0) {
+          const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, req.auth.userId)).limit(1);
+          if (wallet) {
+            await tx.update(wallets).set({ balance: wallet.balance + plan.creditReward }).where(eq(wallets.id, wallet.id));
+            await tx.insert(walletTransactions).values({
+              walletId: wallet.id,
+              type: "credit",
+              amount: plan.creditReward,
+              description: `${plan.name} Subscription Bonus`
+            });
+          }
         }
       }
     });
-    res.json({ success: true });
+    res.json({ success: true, verified: status === "success" });
   } catch (err) {
-    res.status(400).json({ error: err.message || "Failed to subscribe" });
+    res.status(400).json({ error: err.message || "Failed to process payment" });
   }
 });
 var subscriptions_default = router12;
@@ -42435,6 +42632,15 @@ async function ensureMembership(userId, hubId, role) {
 }
 async function seedIfEmpty() {
   try {
+    const [{ c: planCount }] = await db.select({ c: count() }).from(subscriptionPlans);
+    if (Number(planCount) === 0) {
+      await db.insert(subscriptionPlans).values([
+        { tier: "free", name: "Student Free", target: "student", price: 0, creditReward: 0, isActive: 1 },
+        { tier: "pro", name: "Student Premium", target: "student", price: 299, creditReward: 50, isActive: 1 },
+        { tier: "hub_basic", name: "Hub Basic", target: "hub", price: 0, creditReward: 0, isActive: 1 },
+        { tier: "hub_pro", name: "Hub Pro", target: "hub", price: 999, creditReward: 0, isActive: 1 }
+      ]);
+    }
     const [{ c: hubCount }] = await db.select({ c: count() }).from(hubs);
     let hubList = await db.select().from(hubs).orderBy(asc(hubs.name));
     const createdFreshHubs = Number(hubCount) === 0;

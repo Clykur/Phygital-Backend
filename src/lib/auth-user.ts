@@ -1,16 +1,16 @@
 import { eq, type InferSelectModel } from "drizzle-orm";
 import { db } from "@workspace/db";
-import { hubs, memberships, subscriptions, users } from "@workspace/db/schema";
+import { hubs, memberships, userSubscriptions, users } from "@workspace/db/schema";
 import { isHubStaffRole } from "./rbac/hub-membership";
 import type { AuthUser, HubMembership } from "./rbac/types";
 
 export function computePremiumActive(
-  sub: { status: string; premiumUntil: Date } | undefined,
+  sub: { status: string; currentPeriodEnd: Date } | undefined,
 ): boolean {
   if (!sub) return false;
   if (sub.status === "canceled" || sub.status === "past_due") return false;
   if (sub.status !== "active" && sub.status !== "trial") return false;
-  return sub.premiumUntil.getTime() > Date.now();
+  return sub.currentPeriodEnd.getTime() > Date.now();
 }
 
 export async function loadAuthUser(userId: string): Promise<AuthUser | null> {
@@ -19,8 +19,8 @@ export async function loadAuthUser(userId: string): Promise<AuthUser | null> {
   if (user.accountStatus !== "active") return null;
   const [sub] = await db
     .select()
-    .from(subscriptions)
-    .where(eq(subscriptions.userId, userId))
+    .from(userSubscriptions)
+    .where(eq(userSubscriptions.userId, userId))
     .limit(1);
   type MembershipRow = InferSelectModel<typeof memberships>;
   const mems: MembershipRow[] = await db
@@ -44,7 +44,7 @@ export async function loadAuthUser(userId: string): Promise<AuthUser | null> {
     }
   }
   const premiumUntil =
-    sub && sub.premiumUntil.getTime() > 1 ? sub.premiumUntil.toISOString() : null;
+    sub && sub.currentPeriodEnd.getTime() > 1 ? sub.currentPeriodEnd.toISOString() : null;
   const subscriptionPremium = computePremiumActive(sub);
   const premiumActive = user.baseRole === "super_admin" || subscriptionPremium;
   return {
