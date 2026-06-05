@@ -3,7 +3,7 @@
   "functions": {
     "api.js": {
       "runtime": "@vercel/node@3.0.12",
-      "includeFiles": "dist/index.mjs"
+      "includeFiles": "dist/**"
     }
   },
   "routes": [

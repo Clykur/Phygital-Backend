@@ -9,19 +9,17 @@ const router = Router();
 router.use(authMiddleware, requireAuth);
 
 router.get("/balance", async (req, res) => {
-  const [wallet] = await db.select().from(wallets).where(eq(wallets.userId, req.auth!.userId)).limit(1);
+  let [wallet] = await db.select().from(wallets).where(eq(wallets.userId, req.auth!.userId)).limit(1);
   if (!wallet) {
-    res.status(404).json({ error: "Wallet not found" });
-    return;
+    [wallet] = await db.insert(wallets).values({ userId: req.auth!.userId, balance: 0 }).returning();
   }
   res.json({ balance: wallet.balance });
 });
 
 router.get("/transactions", async (req, res) => {
-  const [wallet] = await db.select().from(wallets).where(eq(wallets.userId, req.auth!.userId)).limit(1);
+  let [wallet] = await db.select().from(wallets).where(eq(wallets.userId, req.auth!.userId)).limit(1);
   if (!wallet) {
-    res.status(404).json({ error: "Wallet not found" });
-    return;
+    [wallet] = await db.insert(wallets).values({ userId: req.auth!.userId, balance: 0 }).returning();
   }
   const transactions = await db
     .select()

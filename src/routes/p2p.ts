@@ -23,6 +23,7 @@ import {
 } from "../lib/cover-image-url";
 import { isPremiumOk, requireActiveHub, requireHubStaff } from "../lib/hub-guards";
 import { tryAssignCopyToWaitingRequests } from "../lib/hub-inventory";
+import { getInventoryStatsForTitles } from "../lib/inventory-stats";
 import { notifyUser } from "../lib/in-app-notifications";
 import { nextBookRefId } from "../lib/public-ids";
 import type { DbClient } from "../lib/hub-guards";
@@ -64,11 +65,21 @@ router.get("/listings", authMiddleware, async (_req, res) => {
     .from(p2pListings)
     .leftJoin(users, eq(p2pListings.buyerId, users.id))
     .leftJoin(books, eq(books.listingId, p2pListings.id));
+
+  const titles = [...new Set(rows.map((r) => r.listing.bookTitle))].filter(Boolean) as string[];
+  const statsMap = await getInventoryStatsForTitles(null, titles);
+
   res.json({
     listings: rows.map((r) => ({
       ...r.listing,
       buyerBaseRole: r.buyerBaseRole ?? null,
       refId: r.refId ?? null,
+      inventoryStats: statsMap[`${r.listing.hubId}:${r.listing.bookTitle}`] ?? {
+        total: 0,
+        available: 0,
+        issued: 0,
+        reserved: 0,
+      },
     })),
   });
 });
