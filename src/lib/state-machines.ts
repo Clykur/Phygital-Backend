@@ -1,31 +1,46 @@
 /** Active book requests that count toward per-user cap. */
 export const BOOK_REQUEST_ACTIVE_STATUSES = [
-  "requested",
-  "routed",
-  "fulfilled",
-  "ready",
+  "pending",
+  "available_for_collection",
+  "lease_requested",
+  "lease_approved",
+  "lease_active",
+  "lease_return_pending"
 ] as const;
 
 export function isTerminalBookRequest(status: string): boolean {
-  return status === "picked" || status === "expired" || status === "cancelled";
+  return status === "delivered" || status === "cancelled" || status === "lease_completed" || status === "lease_refunded";
 }
 
-/** Hub staff manual transitions (fulfilled is set by inventory automation). */
-export function isValidStaffBookRequestTransition(from: string, to: string): boolean {
-  if (from === "requested" && to === "routed") return true;
-  if (from === "fulfilled" && to === "ready") return true;
-  if (from === "ready" && to === "picked") return true;
-  return false;
+/** Hub staff may claim an unassigned pending request. */
+export function canClaimBookRequest(status: string, hubId: string | null | undefined): boolean {
+  return status === "pending" && !hubId;
 }
 
-/** Member may withdraw before pickup (releases reserved copy if assigned). */
+/** Hub staff may link inventory to a request assigned to their hub. */
+export function canFulfillBookRequestFromInventory(
+  status: string,
+  hubId: string | null | undefined,
+): boolean {
+  return status === "pending" && !!hubId;
+}
+
+/** Member confirms physical collection at the assigned hub. */
+export function canConfirmBookRequestDelivery(status: string): boolean {
+  return status === "available_for_collection";
+}
+
+/** Member may withdraw before collection. */
 export function isValidUserCancelBookRequest(from: string): boolean {
-  return (
-    from === "requested" ||
-    from === "routed" ||
-    from === "fulfilled" ||
-    from === "ready"
-  );
+  return from === "pending" || from === "available_for_collection" || from === "lease_requested" || from === "lease_approved";
+}
+
+/** Super-admin manual status overrides (audit-logged). */
+export function isValidStaffBookRequestTransition(from: string, to: string): boolean {
+  if (from === "pending" && to === "available_for_collection") return true;
+  if (from === "available_for_collection" && to === "delivered") return true;
+  if (from === "pending" && to === "cancelled") return true;
+  return false;
 }
 
 const P2P_FORWARD = [

@@ -5,7 +5,7 @@ import type { DbClient } from "./hub-guards";
 import { notifyUser } from "./in-app-notifications";
 import { normalizeBookTitle } from "./title-match";
 
-const COPY_HELD_REQUEST_STATUSES = ["fulfilled", "ready"] as const;
+const COPY_HELD_REQUEST_STATUSES = ["available_for_collection"] as const;
 
 /**
  * Expire book requests that still reference this copy (fulfilled / ready).
@@ -30,7 +30,7 @@ export async function expireActiveRequestsForCopy(
     await tx
       .update(bookRequests)
       .set({
-        status: "expired",
+        status: "cancelled",
         assignedCopyId: null,
         assignmentVerified: false,
         assignedAt: null,
@@ -48,7 +48,7 @@ export async function expireActiveRequestsForCopy(
           : `Your reservation for “${label}” has ended.`;
     await notifyUser({
       userId: r.userId,
-      kind: "book_request_expired",
+      kind: "book_request_cancelled",
       body,
       bookRequestId: r.id,
     });
@@ -93,7 +93,7 @@ export async function tryAssignCopyToWaitingRequests(
     .where(
       and(
         eq(bookRequests.hubId, copy.hubId),
-        inArray(bookRequests.status, ["requested", "routed"]),
+        eq(bookRequests.status, "pending"),
         isNotNull(bookRequests.bookTitle),
       ),
     )
@@ -106,7 +106,7 @@ export async function tryAssignCopyToWaitingRequests(
   await tx.execute(sql`SELECT id FROM book_requests WHERE id = ${match.id}::uuid FOR UPDATE`);
 
   const [rowAfter] = await tx.select().from(bookRequests).where(eq(bookRequests.id, match.id)).limit(1);
-  if (!rowAfter || (rowAfter.status !== "requested" && rowAfter.status !== "routed")) return null;
+  if (!rowAfter || rowAfter.status !== "pending") return null;
   if (normalizeBookTitle(String(rowAfter.bookTitle ?? "")) !== norm) return null;
 
   const [bUpd] = await tx
@@ -125,7 +125,11 @@ export async function tryAssignCopyToWaitingRequests(
   await tx
     .update(bookRequests)
     .set({
-      status: "fulfilled",
+      status: "available_for_collection",
+      hubId: rowAfter.hubId ?? copy.hubId,
+      fulfilledByHubId: rowAfter.fulfilledByHubId ?? copy.hubId,
+      fulfilledAt: rowAfter.fulfilledAt ?? new Date(),
+      readyAt: rowAfter.readyAt ?? new Date(),
       assignedCopyId: copy.id,
       assignmentVerified: false,
       assignedAt: new Date(),
@@ -137,15 +141,15 @@ export async function tryAssignCopyToWaitingRequests(
   const label = copy.title.trim() || "your request";
   await notifyUser({
     userId: rowAfter.userId,
-    kind: "book_request_fulfilled",
-    body: `A copy of “${label}” is reserved for your request.`,
+    kind: "book_request_available",
+    body: `Good news! A copy of “${label}” is available for collection at your assigned hub.`,
     bookRequestId: rowAfter.id,
   });
 
   return { requestId: rowAfter.id, userId: rowAfter.userId };
 }
 
-const WAITING_FOR_COPY_STATUSES = ["requested", "routed"] as const;
+const WAITING_FOR_COPY_STATUSES = ["pending"] as const;
 
 /**
  * Link a specific shelf copy to a specific desk request (same hub + normalized title).
@@ -180,10 +184,10 @@ export async function tryAssignCopyToBookRequest(
 
   await tx.execute(sql`SELECT id FROM book_requests WHERE id = ${requestId}::uuid FOR UPDATE`);
   const [req] = await tx.select().from(bookRequests).where(eq(bookRequests.id, requestId)).limit(1);
-  if (!req || (req.status !== "requested" && req.status !== "routed")) {
+  if (!req || req.status !== "pending") {
     return false;
   }
-  if (req.hubId !== book.hubId) return false;
+  if (req.hubId && req.hubId !== book.hubId) return false;
 
   const normBook = normalizeBookTitle(book.title);
   const normReq = normalizeBookTitle(req.bookTitle ?? "");
@@ -218,7 +222,11 @@ export async function tryAssignCopyToBookRequest(
   const [reqUpd] = await tx
     .update(bookRequests)
     .set({
-      status: "fulfilled",
+      status: "available_for_collection",
+      hubId: req.hubId ?? book.hubId,
+      fulfilledByHubId: req.fulfilledByHubId ?? book.hubId,
+      fulfilledAt: req.fulfilledAt ?? new Date(),
+      readyAt: req.readyAt ?? new Date(),
       assignedCopyId: copyId,
       assignmentVerified: opts.assignmentVerified ?? false,
       assignedAt: new Date(),
@@ -244,8 +252,8 @@ export async function tryAssignCopyToBookRequest(
   const label = book.title.trim() || "your request";
   await notifyUser({
     userId: req.userId,
-    kind: "book_request_fulfilled",
-    body: `A copy of “${label}” is reserved for your request.`,
+    kind: "book_request_available",
+    body: `Good news! A copy of “${label}” is available for collection at your assigned hub.`,
     bookRequestId: req.id,
   });
 
@@ -343,7 +351,7 @@ export async function sweepDeskWaitingAssignments(hubScope: string[]): Promise<{
     .where(
       and(
         inArray(bookRequests.hubId, hubScope),
-        inArray(bookRequests.status, ["requested", "routed"]),
+        eq(bookRequests.status, "pending"),
       ),
     )
     .orderBy(asc(bookRequests.createdAt));

@@ -4,6 +4,9 @@ import {
   auditLogs,
   bookRequests,
   books,
+  bountyAcquisitions,
+  bountyRequests,
+  bountySubmissions,
   hubs,
   p2pListings,
   subscriptions,
@@ -15,12 +18,9 @@ import { BOOK_REQUEST_ACTIVE_STATUSES } from "./state-machines";
 export type HubOverviewRange = "today" | "week" | "month";
 
 const REQUEST_BREAKDOWN_STATUSES = [
-  "requested",
-  "routed",
-  "fulfilled",
-  "ready",
-  "picked",
-  "expired",
+  "pending",
+  "available_for_collection",
+  "delivered",
   "cancelled",
 ] as const;
 
@@ -141,12 +141,11 @@ export function computeSuperAdminDerivatives(
     inCirc > 0 ? Math.min(100, Math.round((100 * m.checkedOut) / inCirc)) : 0;
   const transactionsPerDay =
     periodLabelDays > 0 ? m.transactionsInRange / periodLabelDays : 0;
-  const picked = requestBreakdown["picked"] ?? 0;
-  const expired = requestBreakdown["expired"] ?? 0;
+  const delivered = requestBreakdown["delivered"] ?? 0;
   const cancelled = requestBreakdown["cancelled"] ?? 0;
-  const terminal = picked + expired + cancelled;
+  const terminal = delivered + cancelled;
   const requestTerminalSuccessPct =
-    terminal > 0 ? Math.min(100, Math.round((100 * picked) / terminal)) : null;
+    terminal > 0 ? Math.min(100, Math.round((100 * delivered) / terminal)) : null;
   const p2pDenom = m.p2pOnShelf + m.p2pPending;
   const p2pDropoffBacklogRatio =
     p2pDenom > 0 ? m.p2pPending / p2pDenom : 0;
@@ -202,8 +201,8 @@ export async function computeHubAttentionRanks(hubIds: string[]): Promise<HubAtt
     const a = byHub.get(row.hubId);
     if (!a) continue;
     const n = Number(row.n);
-    if (row.status === "requested" || row.status === "routed") a.pendingDesk += n;
-    if (row.status === "ready") a.readyPickup += n;
+    if (row.status === "pending") a.pendingDesk += n;
+    if (row.status === "available_for_collection") a.readyPickup += n;
   }
 
   const p2pRows = await db
@@ -370,7 +369,7 @@ export async function buildHubOverviewPayload(
     .where(
       and(
         inArray(bookRequests.hubId, effective),
-        inArray(bookRequests.status, ["requested", "routed"]),
+        eq(bookRequests.status, "pending"),
       ),
     );
   const pendingRequests = Number(pendingRequestsRows[0]?.n ?? 0);
@@ -381,7 +380,7 @@ export async function buildHubOverviewPayload(
     .where(
       and(
         inArray(bookRequests.hubId, effective),
-        eq(bookRequests.status, "ready"),
+        eq(bookRequests.status, "available_for_collection"),
       ),
     );
   const readyForPickup = Number(readyPickupRows[0]?.n ?? 0);
@@ -393,7 +392,7 @@ export async function buildHubOverviewPayload(
       and(
         inArray(auditLogs.hubId, effective),
         eq(auditLogs.action, "BOOK_REQUEST_STATUS"),
-        sql`(${auditLogs.meta}->>'to') = 'fulfilled'`,
+        sql`(${auditLogs.meta}->>'to') = 'available_for_collection'`,
         gte(auditLogs.createdAt, dayStart),
         eq(auditLogs.denial, false),
       ),
@@ -407,7 +406,7 @@ export async function buildHubOverviewPayload(
       and(
         inArray(auditLogs.hubId, effective),
         eq(auditLogs.action, "BOOK_REQUEST_STATUS"),
-        sql`(${auditLogs.meta}->>'to') = 'fulfilled'`,
+        sql`(${auditLogs.meta}->>'to') = 'available_for_collection'`,
         gte(auditLogs.createdAt, periodStart),
         eq(auditLogs.denial, false),
       ),
@@ -592,7 +591,7 @@ export async function buildHubOverviewPayload(
     .where(
       and(
         inArray(bookRequests.hubId, effective),
-        eq(bookRequests.status, "expired"),
+        eq(bookRequests.status, "cancelled"),
         gte(bookRequests.updatedAt, overviewRangeStart("week")),
       ),
     );
@@ -625,6 +624,64 @@ export async function buildHubOverviewPayload(
       kind: "dropoffs",
       message: "Peer consignment drop-offs pending approval",
       count: p2pPending,
+      severity: "warning",
+    });
+  }
+
+  const bountyOpenRows = await db
+    .select({ n: count() })
+    .from(bountyRequests)
+    .where(
+      and(
+        inArray(bountyRequests.hubId, effective),
+        inArray(bountyRequests.status, ["open", "pending_student_delivery", "under_review"]),
+      ),
+    );
+  const bountyOpenRequests = Number(bountyOpenRows[0]?.n ?? 0);
+
+  const bountyPendingDeliveryRows = await db
+    .select({ n: count() })
+    .from(bountySubmissions)
+    .innerJoin(bountyRequests, eq(bountySubmissions.bountyRequestId, bountyRequests.id))
+    .where(
+      and(
+        inArray(bountyRequests.hubId, effective),
+        inArray(bountySubmissions.status, ["submitted", "awaiting_drop_off", "delivered", "under_review"]),
+      ),
+    );
+  const bountyPendingDeliveries = Number(bountyPendingDeliveryRows[0]?.n ?? 0);
+
+  const bountyAcquiredRows = await db
+    .select({ n: count() })
+    .from(bountyAcquisitions)
+    .innerJoin(bountyRequests, eq(bountyAcquisitions.bountyRequestId, bountyRequests.id))
+    .where(inArray(bountyRequests.hubId, effective));
+  const bountyBooksAcquired = Number(bountyAcquiredRows[0]?.n ?? 0);
+
+  const bountyFulfilledRows = await db
+    .select({ n: count() })
+    .from(bountyRequests)
+    .where(
+      and(inArray(bountyRequests.hubId, effective), eq(bountyRequests.status, "completed")),
+    );
+  const bountyFulfilledRequests = Number(bountyFulfilledRows[0]?.n ?? 0);
+
+  const bountyRewardRows = await db
+    .select({ total: sql<number>`coalesce(sum(${bountyRequests.rewardAmount} * ${bountyRequests.quantity}), 0)` })
+    .from(bountyRequests)
+    .where(
+      and(
+        inArray(bountyRequests.hubId, effective),
+        inArray(bountyRequests.status, ["open", "pending_student_delivery", "under_review", "approved"]),
+      ),
+    );
+  const bountyTotalRewardValue = Number(bountyRewardRows[0]?.total ?? 0);
+
+  if (bountyPendingDeliveries > 0) {
+    alerts.push({
+      kind: "bounty_deliveries",
+      message: "Bounty book submissions awaiting review or delivery",
+      count: bountyPendingDeliveries,
       severity: "warning",
     });
   }
@@ -678,6 +735,11 @@ export async function buildHubOverviewPayload(
       readyForPickup,
       p2pPending,
       p2pOnShelf,
+      bountyOpenRequests,
+      bountyBooksAcquired,
+      bountyPendingDeliveries,
+      bountyTotalRewardValue,
+      bountyFulfilledRequests,
       transactionsToday,
       transactionsInRange,
     },
@@ -732,6 +794,13 @@ export async function buildHubOverviewPayload(
         price: p.price,
         soldAt: p.soldAt?.toISOString() ?? null,
       })),
+    },
+    bounty: {
+      openRequests: bountyOpenRequests,
+      booksAcquired: bountyBooksAcquired,
+      pendingDeliveries: bountyPendingDeliveries,
+      totalRewardValue: bountyTotalRewardValue,
+      fulfilledRequests: bountyFulfilledRequests,
     },
     alerts,
   };

@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@workspace/db";
-import { bookRequests, books } from "@workspace/db/schema";
+import { bookRequests, books, wallets, subscriptions, walletTransactions } from "@workspace/db/schema";
 import { ACTIONS } from "../lib/rbac/actions";
 import { authorize } from "../lib/rbac/authorize";
 import { logAudit } from "../lib/audit";
@@ -83,6 +83,34 @@ router.post("/:bookId/checkout", authMiddleware, requireAuth, async (req, res) =
         (err as Error & { status: number }).status = 409;
         throw err;
       }
+
+      const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, auth.userId)).limit(1);
+      if (!wallet) throw new Error("NO_WALLET");
+
+      const [sub] = await tx.select().from(subscriptions).where(eq(subscriptions.userId, auth.userId)).limit(1);
+      const isPremium = sub?.status === "active" && sub.premiumUntil > new Date();
+
+      if (!isPremium) {
+        if (wallet.balance < book.borrowPrice) {
+          const err = new Error("INSUFFICIENT_CREDITS");
+          (err as Error & { status: number }).status = 402;
+          throw err;
+        }
+        await tx.update(wallets).set({ balance: wallet.balance - book.borrowPrice, updatedAt: new Date() }).where(eq(wallets.id, wallet.id));
+        await tx.insert(walletTransactions).values({
+          walletId: wallet.id,
+          type: "debit",
+          amount: book.borrowPrice,
+          description: `Borrowed book: ${book.title}`,
+        });
+      } else {
+        await tx.insert(walletTransactions).values({
+          walletId: wallet.id,
+          type: "debit",
+          amount: 0,
+          description: `Premium Benefit Applied. Borrowed book: ${book.title}`,
+        });
+      }
       await logAudit({
         userId: auth.userId,
         hubId: book.hubId,
@@ -136,6 +164,14 @@ router.post("/:bookId/checkout", authMiddleware, requireAuth, async (req, res) =
     }
     if (err.message === "HUB_INACTIVE") {
       res.status(403).json({ error: "This hub is inactive." });
+      return;
+    }
+    if (err.message === "INSUFFICIENT_CREDITS") {
+      res.status(402).json({ error: "Insufficient credits to borrow this book." });
+      return;
+    }
+    if (err.message === "NO_WALLET") {
+      res.status(404).json({ error: "Wallet not found for this user." });
       return;
     }
     throw e;
@@ -426,6 +462,7 @@ router.post("/:bookId/return", authMiddleware, requireAuth, async (req, res) => 
       resourceType: "book",
       resourceId: bookId,
     });
+
     return tryAssignCopyToWaitingRequests(tx as DbClient, {
       id: bookId,
       hubId: book.hubId,

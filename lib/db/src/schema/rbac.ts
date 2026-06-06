@@ -76,7 +76,7 @@ export const books = pgTable("books", {
   /** available | reserved | checked_out | unavailable | sold | transfer_pending | in_transit */
   status: text("status").notNull().default("available"),
   condition: text("condition").notNull().default("good"),
-  /** hub_inventory | p2p */
+  /** hub_inventory | p2p | bounty */
   source: text("source").notNull().default("hub_inventory"),
   ownerId: uuid("owner_id").references(() => users.id, { onDelete: "set null" }),
   listingId: uuid("listing_id"),
@@ -148,13 +148,17 @@ export const bookRequests = pgTable("book_requests", {
   userId: uuid("user_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
-  hubId: uuid("hub_id")
-    .notNull()
-    .references(() => hubs.id, { onDelete: "cascade" }),
+  /** Assigned hub once a desk claims the request (null while pending / unclaimed). */
+  hubId: uuid("hub_id").references(() => hubs.id, { onDelete: "set null" }),
   bookTitle: text("book_title"),
+  author: text("author"),
+  isbn: text("isbn"),
   notes: text("notes"),
-  /** requested | routed | fulfilled | ready | picked | expired | cancelled */
-  status: text("status").notNull().default("requested"),
+  /** pending | available_for_collection | delivered | cancelled */
+  status: text("status").notNull().default("pending"),
+  fulfilledByHubId: uuid("fulfilled_by_hub_id").references(() => hubs.id, { onDelete: "set null" }),
+  fulfilledAt: timestamp("fulfilled_at", { withTimezone: true }),
+  deliveredAt: timestamp("delivered_at", { withTimezone: true }),
   assignedCopyId: uuid("assigned_copy_id").references(() => books.id, {
     onDelete: "set null",
   }),

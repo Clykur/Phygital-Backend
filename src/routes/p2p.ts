@@ -6,7 +6,7 @@ import { Router, type IRouter } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@workspace/db";
-import { books, p2pListings, users } from "@workspace/db/schema";
+import { books, p2pListings, users, wallets, subscriptions, walletTransactions } from "@workspace/db/schema";
 import { ACTIONS } from "../lib/rbac/actions";
 import { authorize } from "../lib/rbac/authorize";
 import {
@@ -496,6 +496,35 @@ router.post("/listings/:id/borrow", authMiddleware, requireAuth, async (req, res
         (err as Error & { status: number }).status = 409;
         throw err;
       }
+
+      const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, auth.userId)).limit(1);
+      if (!wallet) throw new Error("NO_WALLET");
+
+      const [sub] = await tx.select().from(subscriptions).where(eq(subscriptions.userId, auth.userId)).limit(1);
+      const isPremium = sub?.status === "active" && sub.premiumUntil > new Date();
+
+      if (!isPremium) {
+        if (wallet.balance < listing.borrowPrice) {
+          const err = new Error("INSUFFICIENT_CREDITS");
+          (err as Error & { status: number }).status = 402;
+          throw err;
+        }
+        await tx.update(wallets).set({ balance: wallet.balance - listing.borrowPrice, updatedAt: new Date() }).where(eq(wallets.id, wallet.id));
+        await tx.insert(walletTransactions).values({
+          walletId: wallet.id,
+          type: "debit",
+          amount: listing.borrowPrice,
+          description: `Borrowed P2P book: ${listing.bookTitle}`,
+        });
+      } else {
+        await tx.insert(walletTransactions).values({
+          walletId: wallet.id,
+          type: "debit",
+          amount: 0,
+          description: `Premium Benefit Applied. Borrowed P2P book: ${listing.bookTitle}`,
+        });
+      }
+
       const now = new Date();
       const [bUpd] = await tx
         .update(books)
@@ -576,6 +605,14 @@ router.post("/listings/:id/borrow", authMiddleware, requireAuth, async (req, res
     }
     if (err.message === "HUB_INACTIVE") {
       res.status(403).json({ error: "This hub is inactive." });
+      return;
+    }
+    if (err.message === "INSUFFICIENT_CREDITS") {
+      res.status(402).json({ error: "Insufficient credits to borrow this book." });
+      return;
+    }
+    if (err.message === "NO_WALLET") {
+      res.status(404).json({ error: "Wallet not found for this user." });
       return;
     }
     throw e;

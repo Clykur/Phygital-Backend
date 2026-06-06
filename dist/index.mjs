@@ -13016,7 +13016,7 @@ import express from "express";
 import pinoHttp from "pino-http";
 
 // src/routes/index.ts
-import { Router as Router13 } from "express";
+import { Router as Router15 } from "express";
 
 // src/routes/health.ts
 import { Router } from "express";
@@ -24160,6 +24160,9 @@ __export(schema_exports, {
   bookRequestHubReassignments: () => bookRequestHubReassignments,
   bookRequests: () => bookRequests,
   books: () => books,
+  bountyAcquisitions: () => bountyAcquisitions,
+  bountyRequests: () => bountyRequests,
+  bountySubmissions: () => bountySubmissions,
   hubSubscriptions: () => hubSubscriptions,
   hubs: () => hubs,
   inAppNotifications: () => inAppNotifications,
@@ -24228,7 +24231,7 @@ var books = pgTable("books", {
   /** available | reserved | checked_out | unavailable | sold | transfer_pending | in_transit */
   status: text("status").notNull().default("available"),
   condition: text("condition").notNull().default("good"),
-  /** hub_inventory | p2p */
+  /** hub_inventory | p2p | bounty */
   source: text("source").notNull().default("hub_inventory"),
   ownerId: uuid("owner_id").references(() => users.id, { onDelete: "set null" }),
   listingId: uuid("listing_id"),
@@ -24292,11 +24295,17 @@ var p2pListings = pgTable("p2p_listings", {
 var bookRequests = pgTable("book_requests", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  hubId: uuid("hub_id").notNull().references(() => hubs.id, { onDelete: "cascade" }),
+  /** Assigned hub once a desk claims the request (null while pending / unclaimed). */
+  hubId: uuid("hub_id").references(() => hubs.id, { onDelete: "set null" }),
   bookTitle: text("book_title"),
+  author: text("author"),
+  isbn: text("isbn"),
   notes: text("notes"),
-  /** requested | routed | fulfilled | ready | picked | expired | cancelled */
-  status: text("status").notNull().default("requested"),
+  /** pending | available_for_collection | delivered | cancelled */
+  status: text("status").notNull().default("pending"),
+  fulfilledByHubId: uuid("fulfilled_by_hub_id").references(() => hubs.id, { onDelete: "set null" }),
+  fulfilledAt: timestamp("fulfilled_at", { withTimezone: true }),
+  deliveredAt: timestamp("delivered_at", { withTimezone: true }),
   assignedCopyId: uuid("assigned_copy_id").references(() => books.id, {
     onDelete: "set null"
   }),
@@ -24429,6 +24438,53 @@ var paymentIntents = pgTable("payment_intents", {
   metadata: json("metadata"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
+
+// lib/db/src/schema/bounty.ts
+var bountyRequests = pgTable("bounty_requests", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  hubId: uuid("hub_id").notNull().references(() => hubs.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  author: text("author"),
+  edition: text("edition"),
+  department: text("department"),
+  semester: text("semester"),
+  subject: text("subject"),
+  isbn: text("isbn"),
+  quantity: integer("quantity").notNull().default(1),
+  /** Whole rupees — reward per accepted copy. */
+  rewardAmount: integer("reward_amount").notNull().default(0),
+  notes: text("notes"),
+  expiryDate: timestamp("expiry_date", { withTimezone: true }),
+  /** open | paused | pending_student_delivery | under_review | approved | rejected | completed | closed */
+  status: text("status").notNull().default("open"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
+var bountySubmissions = pgTable("bounty_submissions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  bountyRequestId: uuid("bounty_request_id").notNull().references(() => bountyRequests.id, { onDelete: "cascade" }),
+  studentId: uuid("student_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  condition: text("condition").notNull().default("good"),
+  edition: text("edition"),
+  notes: text("notes"),
+  photoUrls: jsonb("photo_urls").$type().notNull().default([]),
+  /** submitted | awaiting_drop_off | delivered | under_review | approved | rejected */
+  status: text("status").notNull().default("submitted"),
+  submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
+var bountyAcquisitions = pgTable("bounty_acquisitions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  bountyRequestId: uuid("bounty_request_id").notNull().references(() => bountyRequests.id, { onDelete: "cascade" }),
+  bountySubmissionId: uuid("bounty_submission_id").references(() => bountySubmissions.id, {
+    onDelete: "set null"
+  }),
+  inventoryCopyId: uuid("inventory_copy_id").notNull().references(() => books.id, { onDelete: "cascade" }),
+  studentId: uuid("student_id").references(() => users.id, { onDelete: "set null" }),
+  rewardAmount: integer("reward_amount").notNull().default(0),
+  acquiredAt: timestamp("acquired_at", { withTimezone: true }).notNull().defaultNow()
 });
 
 // lib/db/src/db.ts
@@ -25842,6 +25898,7 @@ async function verifyToken(token) {
 }
 
 // src/lib/rbac/hub-membership.ts
+var HUB_STAFF_ROLES = ["hub_user", "hub_admin"];
 function isHubStaffRole(role) {
   return role === "hub_user" || role === "hub_admin";
 }
@@ -34798,6 +34855,11 @@ router2.post("/register", async (req, res) => {
     return;
   }
   const { name, email, password } = parsed.data;
+  const isPremium = parsed.data.isPremium;
+  if (isPremium) {
+    res.status(400).json({ error: "Premium subscriptions will be available soon.\nOnline payment integration is currently under development.\nPlease register using the Free plan." });
+    return;
+  }
   const accountType = parsed.data.accountType ?? "student";
   const existing = await db.select().from(users).where(eq(users.email, email)).limit(1);
   if (existing.length > 0) {
@@ -34815,17 +34877,17 @@ router2.post("/register", async (req, res) => {
         baseRole: accountType === "super_admin" ? "super_admin" : accountType === "hub" ? "hub" : "user",
         publicId: await nextUserPublicId(accountType === "super_admin" ? "super_admin" : accountType === "hub" ? "hub" : "user")
       }).returning({ id: users.id });
-      const isPremium = parsed.data.isPremium;
+      const isPremium2 = parsed.data.isPremium;
       const until = /* @__PURE__ */ new Date();
-      if (isPremium) until.setMonth(until.getMonth() + 12);
+      if (isPremium2) until.setMonth(until.getMonth() + 12);
       await tx.insert(subscriptions).values({
         userId: row.id,
-        status: isPremium ? "active" : "canceled",
-        premiumUntil: isPremium ? until : /* @__PURE__ */ new Date(0)
+        status: isPremium2 ? "active" : "canceled",
+        premiumUntil: isPremium2 ? until : /* @__PURE__ */ new Date(0)
       });
       await tx.insert(wallets).values({
         userId: row.id,
-        balance: 0
+        balance: 5e3
       });
       const [freePlan] = await tx.select().from(subscriptionPlans).where(eq(subscriptionPlans.tier, "free")).limit(1);
       if (freePlan) {
@@ -34945,7 +35007,7 @@ router2.post("/google", async (req, res) => {
         });
         await tx.insert(wallets).values({
           userId: row.id,
-          balance: 0
+          balance: 5e3
         });
         const [freePlan] = await tx.select().from(subscriptionPlans).where(eq(subscriptionPlans.tier, "free")).limit(1);
         if (freePlan) {
@@ -35204,7 +35266,10 @@ var ACTIONS = {
   BORROW_P2P: "BORROW_P2P",
   SCAN_BOOK: "SCAN_BOOK",
   APPROVE_P2P: "APPROVE_P2P",
-  MANAGE_INVENTORY: "MANAGE_INVENTORY"
+  MANAGE_INVENTORY: "MANAGE_INVENTORY",
+  CREATE_BOUNTY_REQUEST: "CREATE_BOUNTY_REQUEST",
+  MANAGE_BOUNTY_REQUEST: "MANAGE_BOUNTY_REQUEST",
+  SUBMIT_BOUNTY: "SUBMIT_BOUNTY"
 };
 
 // src/lib/hub-guards.ts
@@ -35243,7 +35308,7 @@ function authorize(user, action, resource) {
   if (user.baseRole === "super_admin") return true;
   const freeAllowed = action === ACTIONS.VIEW_CATALOG || action === ACTIONS.TRACK_READING || action === ACTIONS.RAISE_QUERY;
   if (freeAllowed) return true;
-  const premiumAllowed = action === ACTIONS.CHECKOUT_BOOK || action === ACTIONS.PURCHASE_BOOK || action === ACTIONS.REQUEST_BOOK || action === ACTIONS.CREATE_P2P_LISTING || action === ACTIONS.BUY_P2P || action === ACTIONS.BORROW_P2P;
+  const premiumAllowed = action === ACTIONS.CHECKOUT_BOOK || action === ACTIONS.PURCHASE_BOOK || action === ACTIONS.CREATE_P2P_LISTING || action === ACTIONS.BUY_P2P || action === ACTIONS.BORROW_P2P;
   if (premiumAllowed && !isPremiumOk(user)) return false;
   if (action === ACTIONS.EDIT_P2P_LISTING || action === ACTIONS.DELETE_P2P_LISTING) {
     if (resource.type !== "p2p_listing") return false;
@@ -35279,6 +35344,7 @@ function authorize(user, action, resource) {
 function canManageBookRequest(user, resource) {
   if (user.baseRole === "super_admin") return true;
   if (resource.userId === user.userId) return true;
+  if (!resource.hubId) return user.hubStaffHubIds.length > 0;
   return isHubStaff(user, resource.hubId);
 }
 
@@ -35454,7 +35520,7 @@ function normalizeBookTitle(title) {
 }
 
 // src/lib/hub-inventory.ts
-var COPY_HELD_REQUEST_STATUSES = ["fulfilled", "ready"];
+var COPY_HELD_REQUEST_STATUSES = ["available_for_collection"];
 async function expireActiveRequestsForCopy(tx, copyId, reason = "released") {
   const held = await tx.select().from(bookRequests).where(
     and(
@@ -35464,7 +35530,7 @@ async function expireActiveRequestsForCopy(tx, copyId, reason = "released") {
   );
   for (const r of held) {
     await tx.update(bookRequests).set({
-      status: "expired",
+      status: "cancelled",
       assignedCopyId: null,
       assignmentVerified: false,
       assignedAt: null,
@@ -35475,7 +35541,7 @@ async function expireActiveRequestsForCopy(tx, copyId, reason = "released") {
     const body = reason === "staff_scan" ? `The copy reserved for \u201C${label}\u201D was released at the desk.` : reason === "inventory" ? `The copy for \u201C${label}\u201D is no longer reserved (inventory update).` : `Your reservation for \u201C${label}\u201D has ended.`;
     await notifyUser({
       userId: r.userId,
-      kind: "book_request_expired",
+      kind: "book_request_cancelled",
       body,
       bookRequestId: r.id
     });
@@ -35500,7 +35566,7 @@ async function tryAssignCopyToWaitingRequests(tx, copy) {
   const waiters = await tx.select().from(bookRequests).where(
     and(
       eq(bookRequests.hubId, copy.hubId),
-      inArray(bookRequests.status, ["requested", "routed"]),
+      eq(bookRequests.status, "pending"),
       isNotNull(bookRequests.bookTitle)
     )
   ).orderBy(asc(bookRequests.createdAt)).limit(120);
@@ -35508,7 +35574,7 @@ async function tryAssignCopyToWaitingRequests(tx, copy) {
   if (!match) return null;
   await tx.execute(sql`SELECT id FROM book_requests WHERE id = ${match.id}::uuid FOR UPDATE`);
   const [rowAfter] = await tx.select().from(bookRequests).where(eq(bookRequests.id, match.id)).limit(1);
-  if (!rowAfter || rowAfter.status !== "requested" && rowAfter.status !== "routed") return null;
+  if (!rowAfter || rowAfter.status !== "pending") return null;
   if (normalizeBookTitle(String(rowAfter.bookTitle ?? "")) !== norm) return null;
   const [bUpd] = await tx.update(books).set({
     status: "reserved",
@@ -35518,7 +35584,11 @@ async function tryAssignCopyToWaitingRequests(tx, copy) {
   }).where(and(eq(books.id, copy.id), eq(books.status, "available"))).returning({ id: books.id });
   if (!bUpd) return null;
   await tx.update(bookRequests).set({
-    status: "fulfilled",
+    status: "available_for_collection",
+    hubId: rowAfter.hubId ?? copy.hubId,
+    fulfilledByHubId: rowAfter.fulfilledByHubId ?? copy.hubId,
+    fulfilledAt: rowAfter.fulfilledAt ?? /* @__PURE__ */ new Date(),
+    readyAt: rowAfter.readyAt ?? /* @__PURE__ */ new Date(),
     assignedCopyId: copy.id,
     assignmentVerified: false,
     assignedAt: /* @__PURE__ */ new Date(),
@@ -35528,13 +35598,13 @@ async function tryAssignCopyToWaitingRequests(tx, copy) {
   const label = copy.title.trim() || "your request";
   await notifyUser({
     userId: rowAfter.userId,
-    kind: "book_request_fulfilled",
-    body: `A copy of \u201C${label}\u201D is reserved for your request.`,
+    kind: "book_request_available",
+    body: `Good news! A copy of \u201C${label}\u201D is available for collection at your assigned hub.`,
     bookRequestId: rowAfter.id
   });
   return { requestId: rowAfter.id, userId: rowAfter.userId };
 }
-var WAITING_FOR_COPY_STATUSES = ["requested", "routed"];
+var WAITING_FOR_COPY_STATUSES = ["pending"];
 async function tryAssignCopyToBookRequest(tx, copyId, requestId, opts = {}) {
   await tx.execute(sql`SELECT id FROM books WHERE id = ${copyId}::uuid FOR UPDATE`);
   const [book] = await tx.select().from(books).where(eq(books.id, copyId)).limit(1);
@@ -35544,10 +35614,10 @@ async function tryAssignCopyToBookRequest(tx, copyId, requestId, opts = {}) {
   }
   await tx.execute(sql`SELECT id FROM book_requests WHERE id = ${requestId}::uuid FOR UPDATE`);
   const [req] = await tx.select().from(bookRequests).where(eq(bookRequests.id, requestId)).limit(1);
-  if (!req || req.status !== "requested" && req.status !== "routed") {
+  if (!req || req.status !== "pending") {
     return false;
   }
-  if (req.hubId !== book.hubId) return false;
+  if (req.hubId && req.hubId !== book.hubId) return false;
   const normBook = normalizeBookTitle(book.title);
   const normReq = normalizeBookTitle(req.bookTitle ?? "");
   if (!opts.allowTitleMismatch) {
@@ -35568,7 +35638,11 @@ async function tryAssignCopyToBookRequest(tx, copyId, requestId, opts = {}) {
   }).where(and(eq(books.id, copyId), eq(books.status, "available"))).returning({ id: books.id });
   if (!bUpd) return false;
   const [reqUpd] = await tx.update(bookRequests).set({
-    status: "fulfilled",
+    status: "available_for_collection",
+    hubId: req.hubId ?? book.hubId,
+    fulfilledByHubId: req.fulfilledByHubId ?? book.hubId,
+    fulfilledAt: req.fulfilledAt ?? /* @__PURE__ */ new Date(),
+    readyAt: req.readyAt ?? /* @__PURE__ */ new Date(),
     assignedCopyId: copyId,
     assignmentVerified: opts.assignmentVerified ?? false,
     assignedAt: /* @__PURE__ */ new Date(),
@@ -35587,8 +35661,8 @@ async function tryAssignCopyToBookRequest(tx, copyId, requestId, opts = {}) {
   const label = book.title.trim() || "your request";
   await notifyUser({
     userId: req.userId,
-    kind: "book_request_fulfilled",
-    body: `A copy of \u201C${label}\u201D is reserved for your request.`,
+    kind: "book_request_available",
+    body: `Good news! A copy of \u201C${label}\u201D is available for collection at your assigned hub.`,
     bookRequestId: req.id
   });
   return true;
@@ -35640,7 +35714,7 @@ async function sweepDeskWaitingAssignments(hubScope) {
   const rows = await db.select().from(bookRequests).where(
     and(
       inArray(bookRequests.hubId, hubScope),
-      inArray(bookRequests.status, ["requested", "routed"])
+      eq(bookRequests.status, "pending")
     )
   ).orderBy(asc(bookRequests.createdAt));
   let linked = 0;
@@ -35751,6 +35825,31 @@ router4.post("/:bookId/checkout", authMiddleware, requireAuth, async (req, res) 
         err.status = 409;
         throw err;
       }
+      const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, auth.userId)).limit(1);
+      if (!wallet) throw new Error("NO_WALLET");
+      const [sub] = await tx.select().from(subscriptions).where(eq(subscriptions.userId, auth.userId)).limit(1);
+      const isPremium = sub?.status === "active" && sub.premiumUntil > /* @__PURE__ */ new Date();
+      if (!isPremium) {
+        if (wallet.balance < book.borrowPrice) {
+          const err = new Error("INSUFFICIENT_CREDITS");
+          err.status = 402;
+          throw err;
+        }
+        await tx.update(wallets).set({ balance: wallet.balance - book.borrowPrice, updatedAt: /* @__PURE__ */ new Date() }).where(eq(wallets.id, wallet.id));
+        await tx.insert(walletTransactions).values({
+          walletId: wallet.id,
+          type: "debit",
+          amount: book.borrowPrice,
+          description: `Borrowed book: ${book.title}`
+        });
+      } else {
+        await tx.insert(walletTransactions).values({
+          walletId: wallet.id,
+          type: "debit",
+          amount: 0,
+          description: `Premium Benefit Applied. Borrowed book: ${book.title}`
+        });
+      }
       await logAudit({
         userId: auth.userId,
         hubId: book.hubId,
@@ -35802,6 +35901,14 @@ router4.post("/:bookId/checkout", authMiddleware, requireAuth, async (req, res) 
     }
     if (err.message === "HUB_INACTIVE") {
       res.status(403).json({ error: "This hub is inactive." });
+      return;
+    }
+    if (err.message === "INSUFFICIENT_CREDITS") {
+      res.status(402).json({ error: "Insufficient credits to borrow this book." });
+      return;
+    }
+    if (err.message === "NO_WALLET") {
+      res.status(404).json({ error: "Wallet not found for this user." });
       return;
     }
     throw e;
@@ -36281,22 +36388,30 @@ import { Router as Router5 } from "express";
 
 // src/lib/state-machines.ts
 var BOOK_REQUEST_ACTIVE_STATUSES = [
-  "requested",
-  "routed",
-  "fulfilled",
-  "ready"
+  "pending",
+  "available_for_collection",
+  "lease_requested",
+  "lease_approved",
+  "lease_active",
+  "lease_return_pending"
 ];
 function isTerminalBookRequest(status) {
-  return status === "picked" || status === "expired" || status === "cancelled";
+  return status === "delivered" || status === "cancelled" || status === "lease_completed" || status === "lease_refunded";
 }
-function isValidStaffBookRequestTransition(from, to) {
-  if (from === "requested" && to === "routed") return true;
-  if (from === "fulfilled" && to === "ready") return true;
-  if (from === "ready" && to === "picked") return true;
-  return false;
+function canClaimBookRequest(status, hubId) {
+  return status === "pending" && !hubId;
+}
+function canConfirmBookRequestDelivery(status) {
+  return status === "available_for_collection";
 }
 function isValidUserCancelBookRequest(from) {
-  return from === "requested" || from === "routed" || from === "fulfilled" || from === "ready";
+  return from === "pending" || from === "available_for_collection" || from === "lease_requested" || from === "lease_approved";
+}
+function isValidStaffBookRequestTransition(from, to) {
+  if (from === "pending" && to === "available_for_collection") return true;
+  if (from === "available_for_collection" && to === "delivered") return true;
+  if (from === "pending" && to === "cancelled") return true;
+  return false;
 }
 var P2P_FORWARD = [
   "listed",
@@ -36346,7 +36461,7 @@ async function expireStaleReadyBookRequests() {
   const cutoff = new Date(Date.now() - hours * 60 * 60 * 1e3);
   const stale = await db.select().from(bookRequests).where(
     and(
-      eq(bookRequests.status, "ready"),
+      eq(bookRequests.status, "available_for_collection"),
       isNotNull(bookRequests.readyAt),
       lt(bookRequests.readyAt, cutoff)
     )
@@ -36356,7 +36471,7 @@ async function expireStaleReadyBookRequests() {
     await db.transaction(async (tx) => {
       const copyId = row.assignedCopyId;
       await tx.update(bookRequests).set({
-        status: "expired",
+        status: "cancelled",
         assignedCopyId: null,
         assignmentVerified: false,
         assignedAt: null,
@@ -36376,7 +36491,7 @@ async function expireStaleReadyBookRequests() {
     const label = row.bookTitle?.trim() || "your request";
     await notifyUser({
       userId: row.userId,
-      kind: "book_request_expired",
+      kind: "book_request_cancelled",
       body: `Your pickup window for \u201C${label}\u201D closed. The copy was returned to the shelf.`,
       bookRequestId: row.id
     });
@@ -36396,7 +36511,7 @@ async function expireStaleFulfilledBookRequests() {
   const cutoff = new Date(Date.now() - hours * 60 * 60 * 1e3);
   const stale = await db.select().from(bookRequests).where(
     and(
-      eq(bookRequests.status, "fulfilled"),
+      eq(bookRequests.status, "available_for_collection"),
       isNotNull(bookRequests.assignedCopyId),
       lt(bookRequests.updatedAt, cutoff)
     )
@@ -36407,7 +36522,7 @@ async function expireStaleFulfilledBookRequests() {
     if (!copyId) continue;
     await db.transaction(async (tx) => {
       await tx.update(bookRequests).set({
-        status: "expired",
+        status: "cancelled",
         assignedCopyId: null,
         assignmentVerified: false,
         assignedAt: null,
@@ -36425,7 +36540,7 @@ async function expireStaleFulfilledBookRequests() {
     const label = row.bookTitle?.trim() || "your request";
     await notifyUser({
       userId: row.userId,
-      kind: "book_request_expired",
+      kind: "book_request_cancelled",
       body: `Your reserved copy for \u201C${label}\u201D timed out before pickup was opened. The copy was returned to the queue.`,
       bookRequestId: row.id
     });
@@ -36443,11 +36558,11 @@ async function expireStaleFulfilledBookRequests() {
 async function expireStaleRequestedBookRequests() {
   const now = /* @__PURE__ */ new Date();
   const updated = await db.update(bookRequests).set({
-    status: "expired",
+    status: "cancelled",
     updatedAt: now
   }).where(
     and(
-      eq(bookRequests.status, "requested"),
+      eq(bookRequests.status, "pending"),
       isNotNull(bookRequests.expiresAt),
       lt(bookRequests.expiresAt, now)
     )
@@ -36466,7 +36581,7 @@ async function expireStaleRequestedBookRequests() {
       const label = row.bookTitle?.trim() || "your request";
       await notifyUser({
         userId: row.userId,
-        kind: "book_request_expired",
+        kind: "book_request_cancelled",
         body: `Your request for \u201C${label}\u201D timed out before the hub could route it. Start a new request if you still need the book.`,
         bookRequestId: row.id
       });
@@ -36486,6 +36601,30 @@ async function expireAllStaleBookRequests() {
   await expireStaleRequestedBookRequests();
   await expireStaleFulfilledBookRequests();
   await expireStaleReadyBookRequests();
+}
+
+// src/lib/notify-hub-staff.ts
+async function notifyAllHubStaff(input) {
+  const staffRows = await db.selectDistinct({ userId: memberships.userId }).from(memberships).where(inArray(memberships.role, [...HUB_STAFF_ROLES]));
+  const superRows = await db.select({ id: users.id }).from(users).where(eq(users.baseRole, "super_admin"));
+  const recipientIds = /* @__PURE__ */ new Set();
+  for (const r of staffRows) recipientIds.add(r.userId);
+  for (const r of superRows) recipientIds.add(r.id);
+  await Promise.all(
+    [...recipientIds].map(
+      (userId) => notifyUser({
+        userId,
+        kind: input.kind,
+        body: input.body,
+        bookRequestId: input.bookRequestId
+      })
+    )
+  );
+}
+async function hubNameById(hubId) {
+  const [row] = await db.select({ name: hubs.name, location: hubs.location }).from(hubs).where(eq(hubs.id, hubId)).limit(1);
+  if (!row) return "the hub";
+  return row.location ? `${row.name} (${row.location})` : row.name;
 }
 
 // src/routes/book-requests.ts
@@ -36522,13 +36661,15 @@ function requestedExpiresAt() {
   return new Date(Date.now() + hours * 60 * 60 * 1e3);
 }
 var createSchema = external_exports.object({
-  hubId: external_exports.string().uuid(),
   bookTitle: external_exports.string().max(500, "Book title must be at most 500 characters").transform((s) => s.trim()).refine((s) => s.length > 0, { message: "Book title is required" }),
-  notes: external_exports.string().max(2e3).optional()
+  author: external_exports.string().max(300).optional(),
+  isbn: external_exports.string().max(32).optional(),
+  notes: external_exports.string().max(2e3).optional(),
+  isLongTermLease: external_exports.boolean().optional()
 });
-var patchSchema = external_exports.object({
-  status: external_exports.enum(["routed", "ready", "picked"]).optional(),
-  assignmentVerified: external_exports.boolean().optional()
+var claimSchema = external_exports.object({
+  hubId: external_exports.string().uuid(),
+  confirm: external_exports.literal(true)
 });
 var assignCopySchema = external_exports.object({
   confirm: external_exports.literal(true),
@@ -36539,15 +36680,22 @@ function normalizeOptionalText(s) {
   const t = s.trim();
   return t.length === 0 ? null : t;
 }
+function serializeRequest(row, extras) {
+  return {
+    ...row,
+    assignedHubId: row.hubId,
+    requesterPublicId: extras?.requesterPublicId ?? null,
+    assignedCopyRefId: extras?.assignedCopyRefId ?? null
+  };
+}
 router5.post("/", authMiddleware, requireAuth, async (req, res) => {
   const auth = req.auth;
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) {
     const bookErr = parsed.error.flatten().fieldErrors.bookTitle?.[0];
     const notesErr = parsed.error.flatten().fieldErrors.notes?.[0];
-    const hubErr = parsed.error.flatten().fieldErrors.hubId?.[0];
     res.status(400).json({
-      error: bookErr ?? notesErr ?? hubErr ?? "Invalid body. hubId (UUID) and bookTitle (non-empty) are required; notes optional."
+      error: bookErr ?? notesErr ?? "Invalid body. bookTitle is required; author, isbn, and notes are optional."
     });
     return;
   }
@@ -36555,31 +36703,23 @@ router5.post("/", authMiddleware, requireAuth, async (req, res) => {
     type: "book_request",
     requestId: "new",
     userId: auth.userId,
-    hubId: parsed.data.hubId
+    hubId: ""
   });
   if (!ok) {
     await logAudit({
       userId: auth.userId,
-      hubId: parsed.data.hubId,
       action: ACTIONS.REQUEST_BOOK,
       denial: true
     });
     res.status(403).json({
-      error: isPremiumOk(auth) ? "You can\u2019t create a request for this hub." : "Premium is required to request books, or your plan has expired. Upgrade to continue."
+      error: isPremiumOk(auth) ? "You can't create a book request right now." : "Premium is required to request books, or your plan has expired. Upgrade to continue."
     });
-    return;
-  }
-  const [hubRow] = await db.select({ id: hubs.id, isActive: hubs.isActive }).from(hubs).where(eq(hubs.id, parsed.data.hubId)).limit(1);
-  if (!hubRow) {
-    res.status(400).json({ error: "Unknown hub. Pick a valid hub from the list." });
-    return;
-  }
-  if (!hubRow.isActive) {
-    res.status(403).json({ error: "This hub is not accepting requests right now." });
     return;
   }
   await expireAllStaleBookRequests();
   const bookTitle = parsed.data.bookTitle;
+  const author = normalizeOptionalText(parsed.data.author);
+  const isbn = normalizeOptionalText(parsed.data.isbn);
   const notes = normalizeOptionalText(parsed.data.notes);
   const [{ activeCount }] = await db.select({ activeCount: count() }).from(bookRequests).where(
     and(
@@ -36589,7 +36729,7 @@ router5.post("/", authMiddleware, requireAuth, async (req, res) => {
   );
   if (Number(activeCount) >= MAX_ACTIVE_REQUESTS) {
     res.status(409).json({
-      error: `You already have ${MAX_ACTIVE_REQUESTS} active book requests. Wait until one is picked up, expires, or is closed before adding another.`
+      error: `You already have ${MAX_ACTIVE_REQUESTS} active book requests. Complete or cancel one before adding another.`
     });
     return;
   }
@@ -36597,55 +36737,53 @@ router5.post("/", authMiddleware, requireAuth, async (req, res) => {
   const [dup] = await db.select({ id: bookRequests.id }).from(bookRequests).where(
     and(
       eq(bookRequests.userId, auth.userId),
-      eq(bookRequests.hubId, parsed.data.hubId),
       inArray(bookRequests.status, [...BOOK_REQUEST_ACTIVE_STATUSES]),
       sql`regexp_replace(lower(trim(${bookRequests.bookTitle})), E'\\s+', ' ', 'g') = ${normalized}`
     )
   ).limit(1);
   if (dup) {
     res.status(409).json({
-      error: "You already have an active request for this book at this hub. Check My activity \u2192 Requests."
+      error: "You already have an active request for this book. Check My activity \u2192 Requests."
     });
     return;
   }
   const [row] = await db.insert(bookRequests).values({
     userId: auth.userId,
-    hubId: parsed.data.hubId,
+    hubId: null,
     bookTitle,
-    notes,
-    status: "requested",
-    readyAt: null,
+    author,
+    isbn,
+    notes: normalizeOptionalText(parsed.data.notes),
+    status: parsed.data.isLongTermLease ? "lease_requested" : "pending",
     expiresAt: requestedExpiresAt()
   }).returning();
   await logAudit({
     userId: auth.userId,
     actorId: auth.userId,
-    hubId: parsed.data.hubId,
     action: ACTIONS.REQUEST_BOOK,
     resourceType: "book_request",
     resourceId: row.id,
     denial: false,
-    meta: {
-      bookTitle,
-      requestUserId: auth.userId
-    }
+    meta: { bookTitle, requestUserId: auth.userId }
   });
-  let responseRow = row;
-  await db.transaction(async (tx) => {
-    await tryAssignAvailableCopiesForDeskTitle(tx, parsed.data.hubId, bookTitle, {
-      preferRequestId: row.id
-    });
+  const titleLabel = bookTitle.trim();
+  await notifyAllHubStaff({
+    kind: "book_request_new",
+    body: `New book request
+
+A student has requested:
+${titleLabel}
+
+Review and fulfill if available.`,
+    bookRequestId: row.id
   });
-  const [afterAssign] = await db.select().from(bookRequests).where(eq(bookRequests.id, row.id)).limit(1);
-  if (afterAssign) responseRow = afterAssign;
   await recordLifecycleEvent({
     type: "request_created",
     userId: auth.userId,
-    hubId: parsed.data.hubId,
-    metadata: { requestId: responseRow.id, bookTitle: responseRow.bookTitle ?? null }
+    metadata: { requestId: row.id, bookTitle: row.bookTitle ?? null }
   });
-  const [request] = await withReassignMeta([responseRow]);
-  res.status(201).json({ request });
+  const [request] = await withReassignMeta([row]);
+  res.status(201).json({ request: serializeRequest(request) });
 });
 router5.post("/:id/cancel", authMiddleware, requireAuth, async (req, res) => {
   const auth = req.auth;
@@ -36665,7 +36803,7 @@ router5.post("/:id/cancel", authMiddleware, requireAuth, async (req, res) => {
   }
   if (!isValidUserCancelBookRequest(row.status)) {
     res.status(409).json({
-      error: "You can\u2019t withdraw this request anymore (already picked up, expired, or withdrawn)."
+      error: "You can't withdraw this request anymore (already delivered or cancelled)."
     });
     return;
   }
@@ -36687,7 +36825,7 @@ router5.post("/:id/cancel", authMiddleware, requireAuth, async (req, res) => {
         throw err;
       }
       priorStatus = fresh.status;
-      const copyId = fresh.assignedCopyId && (fresh.status === "fulfilled" || fresh.status === "ready") ? fresh.assignedCopyId : null;
+      const copyId = fresh.assignedCopyId && fresh.status === "available_for_collection" ? fresh.assignedCopyId : null;
       const [u] = await tx.update(bookRequests).set({
         status: "cancelled",
         assignedCopyId: null,
@@ -36731,7 +36869,7 @@ router5.post("/:id/cancel", authMiddleware, requireAuth, async (req, res) => {
   await notifyUser({
     userId: row.userId,
     kind: "book_request_cancelled",
-    body: `You withdrew your request for \u201C${titleLabel}\u201D.`,
+    body: `You withdrew your request for "${titleLabel}".`,
     bookRequestId: row.id
   });
   await recordLifecycleEvent({
@@ -36742,12 +36880,13 @@ router5.post("/:id/cancel", authMiddleware, requireAuth, async (req, res) => {
     metadata: { requestId: row.id, priorStatus }
   });
   const [request] = await withReassignMeta([fixed]);
-  res.json({ request });
+  res.json({ request: serializeRequest(request) });
 });
 router5.get("/mine", authMiddleware, requireAuth, async (req, res) => {
   await expireAllStaleBookRequests();
   const rows = await db.select().from(bookRequests).where(eq(bookRequests.userId, req.auth.userId)).orderBy(desc(bookRequests.updatedAt));
-  res.json({ requests: await withReassignMeta(rows) });
+  const withMeta = await withReassignMeta(rows);
+  res.json({ requests: withMeta.map((r) => serializeRequest(r)) });
 });
 router5.get("/hub", authMiddleware, requireAuth, async (req, res) => {
   const auth = req.auth;
@@ -36758,11 +36897,16 @@ router5.get("/hub", authMiddleware, requireAuth, async (req, res) => {
   await expireAllStaleBookRequests();
   const hubIdFilter = typeof req.query["hubId"] === "string" ? req.query["hubId"] : null;
   if (hubIdFilter && !auth.hubStaffHubIds.includes(hubIdFilter)) {
-    res.status(403).json({ error: "You don\u2019t manage that hub." });
+    res.status(403).json({ error: "You don't manage that hub." });
     return;
   }
   const hubScope = hubIdFilter ? [hubIdFilter] : auth.hubStaffHubIds;
-  const rows = await db.select().from(bookRequests).where(inArray(bookRequests.hubId, hubScope)).orderBy(desc(bookRequests.updatedAt));
+  const rows = await db.select().from(bookRequests).where(
+    or(
+      and(eq(bookRequests.status, "pending"), isNull(bookRequests.hubId)),
+      inArray(bookRequests.hubId, hubScope)
+    )
+  ).orderBy(desc(bookRequests.updatedAt));
   const withMeta = await withReassignMeta(rows);
   const userIds = [...new Set(withMeta.map((r) => r.userId))];
   const copyIds = [...new Set(withMeta.map((r) => r.assignedCopyId).filter((v) => !!v))];
@@ -36771,11 +36915,12 @@ router5.get("/hub", authMiddleware, requireAuth, async (req, res) => {
   const userPublicIdById = new Map(userRows.map((u) => [u.id, u.publicId ?? null]));
   const copyRefById = new Map(copyRows.map((c) => [c.id, c.refId ?? null]));
   res.json({
-    requests: withMeta.map((r) => ({
-      ...r,
-      requesterPublicId: userPublicIdById.get(r.userId) ?? null,
-      assignedCopyRefId: r.assignedCopyId ? copyRefById.get(r.assignedCopyId) ?? null : null
-    }))
+    requests: withMeta.map(
+      (r) => serializeRequest(r, {
+        requesterPublicId: userPublicIdById.get(r.userId) ?? null,
+        assignedCopyRefId: r.assignedCopyId ? copyRefById.get(r.assignedCopyId) ?? null : null
+      })
+    )
   });
 });
 router5.get("/:id", authMiddleware, requireAuth, async (req, res) => {
@@ -36794,14 +36939,191 @@ router5.get("/:id", authMiddleware, requireAuth, async (req, res) => {
     type: "book_request",
     requestId: row.id,
     userId: row.userId,
-    hubId: row.hubId
+    hubId: row.hubId ?? ""
   };
-  if (!canManageBookRequest(auth, resrc)) {
+  if (!canManageBookRequest(auth, resrc) && row.userId !== auth.userId) {
     res.status(403).json({ error: "Forbidden" });
     return;
   }
   const [request] = await withReassignMeta([row]);
-  res.json({ request });
+  res.json({ request: serializeRequest(request) });
+});
+router5.post("/:id/claim", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  const id = pathParam(req.params["id"]);
+  if (!id) {
+    res.status(400).json({ error: "Missing id" });
+    return;
+  }
+  const parsed = claimSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "hubId (UUID) and confirm: true are required." });
+    return;
+  }
+  if (!auth.hubStaffHubIds.includes(parsed.data.hubId)) {
+    res.status(403).json({ error: "You don't manage that hub." });
+    return;
+  }
+  try {
+    await requireActiveHub(db, parsed.data.hubId);
+  } catch {
+    res.status(403).json({ error: "This hub is not active." });
+    return;
+  }
+  const [row] = await db.select().from(bookRequests).where(eq(bookRequests.id, id)).limit(1);
+  if (!row) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  if (!canClaimBookRequest(row.status, row.hubId)) {
+    res.status(409).json({ error: "This request is no longer available to claim." });
+    return;
+  }
+  const now = /* @__PURE__ */ new Date();
+  let updated;
+  try {
+    [updated] = await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT id FROM book_requests WHERE id = ${id}::uuid FOR UPDATE`);
+      const [fresh] = await tx.select().from(bookRequests).where(eq(bookRequests.id, id)).limit(1);
+      if (!fresh || !canClaimBookRequest(fresh.status, fresh.hubId)) {
+        const err = new Error("STALE_CLAIM");
+        err.status = 409;
+        throw err;
+      }
+      await tx.update(bookRequests).set({
+        hubId: parsed.data.hubId,
+        fulfilledByHubId: parsed.data.hubId,
+        fulfilledAt: now,
+        updatedAt: now
+      }).where(eq(bookRequests.id, id));
+      if (fresh.bookTitle?.trim()) {
+        await tryAssignAvailableCopiesForDeskTitle(tx, parsed.data.hubId, fresh.bookTitle, {
+          preferRequestId: id,
+          preferOnly: true
+        });
+      }
+      const [afterAssign] = await tx.select().from(bookRequests).where(eq(bookRequests.id, id)).limit(1);
+      if (afterAssign && (afterAssign.status === "pending" || afterAssign.status === "lease_requested")) {
+        const [u] = await tx.update(bookRequests).set({
+          status: afterAssign.status === "lease_requested" ? "lease_approved" : "available_for_collection",
+          readyAt: now,
+          updatedAt: now
+        }).where(eq(bookRequests.id, id)).returning();
+        return [u];
+      }
+      return [afterAssign];
+    });
+  } catch (e) {
+    const err = e;
+    if (err.message === "STALE_CLAIM") {
+      res.status(409).json({ error: "Another hub claimed this request. Refresh to see updates." });
+      return;
+    }
+    throw e;
+  }
+  const hubLabel = await hubNameById(parsed.data.hubId);
+  const titleLabel = row.bookTitle?.trim() || "your requested book";
+  await notifyUser({
+    userId: row.userId,
+    kind: "book_request_available",
+    body: `Good news!
+
+Your requested book is now available at:
+
+${hubLabel}
+
+Please visit the Hub to collect it.`,
+    bookRequestId: row.id
+  });
+  await logAudit({
+    userId: auth.userId,
+    actorId: auth.userId,
+    hubId: parsed.data.hubId,
+    action: "BOOK_REQUEST_CLAIMED",
+    resourceType: "book_request",
+    resourceId: id,
+    meta: { requestUserId: row.userId, bookTitle: row.bookTitle ?? null }
+  });
+  const [request] = await withReassignMeta([updated]);
+  res.json({ request: serializeRequest(request) });
+});
+router5.post("/:id/confirm-delivery", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  const id = pathParam(req.params["id"]);
+  if (!id) {
+    res.status(400).json({ error: "Missing id" });
+    return;
+  }
+  const [row] = await db.select().from(bookRequests).where(eq(bookRequests.id, id)).limit(1);
+  if (!row) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  if (row.userId !== auth.userId) {
+    res.status(403).json({ error: "Only the requesting student can confirm collection." });
+    return;
+  }
+  if (!canConfirmBookRequestDelivery(row.status)) {
+    res.status(409).json({ error: "This request is not ready for collection confirmation." });
+    return;
+  }
+  const now = /* @__PURE__ */ new Date();
+  let updated;
+  try {
+    [updated] = await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT id FROM book_requests WHERE id = ${id}::uuid FOR UPDATE`);
+      const [fresh] = await tx.select().from(bookRequests).where(eq(bookRequests.id, id)).limit(1);
+      if (!fresh || fresh.userId !== auth.userId || !canConfirmBookRequestDelivery(fresh.status)) {
+        const err = new Error("STALE_DELIVERY");
+        err.status = 409;
+        throw err;
+      }
+      if (fresh.assignedCopyId) {
+        await tx.execute(
+          sql`SELECT id FROM books WHERE id = ${fresh.assignedCopyId}::uuid FOR UPDATE`
+        );
+        const [copy] = await tx.select().from(books).where(eq(books.id, fresh.assignedCopyId)).limit(1);
+        if (copy && copy.status === "reserved") {
+          await tx.update(books).set({
+            status: "checked_out",
+            borrowerUserId: fresh.userId,
+            dueAt: checkoutDueAt(),
+            updatedAt: now
+          }).where(and(eq(books.id, fresh.assignedCopyId), eq(books.status, "reserved")));
+        }
+      }
+      const [u] = await tx.update(bookRequests).set({
+        status: fresh.status === "lease_approved" ? "lease_active" : "delivered",
+        deliveredAt: now,
+        updatedAt: now
+      }).where(eq(bookRequests.id, id)).returning();
+      return [u];
+    });
+  } catch (e) {
+    const err = e;
+    if (err.message === "STALE_DELIVERY") {
+      res.status(409).json({ error: "This request changed. Refresh and try again." });
+      return;
+    }
+    throw e;
+  }
+  await notifyUser({
+    userId: row.userId,
+    kind: "book_request_delivered",
+    body: "Your request has been successfully completed.\nThank you.",
+    bookRequestId: row.id
+  });
+  await logAudit({
+    userId: auth.userId,
+    actorId: auth.userId,
+    hubId: row.hubId,
+    action: "BOOK_REQUEST_DELIVERED",
+    resourceType: "book_request",
+    resourceId: id,
+    meta: { assignedCopyId: row.assignedCopyId }
+  });
+  const [request] = await withReassignMeta([updated]);
+  res.json({ request: serializeRequest(request) });
 });
 router5.post("/:id/assign-copy", authMiddleware, requireAuth, async (req, res) => {
   const auth = req.auth;
@@ -36820,15 +37142,19 @@ router5.post("/:id/assign-copy", authMiddleware, requireAuth, async (req, res) =
     res.status(404).json({ error: "Not found" });
     return;
   }
+  if (!row.hubId) {
+    res.status(409).json({ error: "Claim this request for your hub before assigning a copy." });
+    return;
+  }
   try {
     requireHubStaff(auth, row.hubId);
     await requireActiveHub(db, row.hubId);
   } catch {
-    res.status(403).json({ error: "Only hub staff for this hub can assign copies." });
+    res.status(403).json({ error: "Only hub staff for the assigned hub can assign copies." });
     return;
   }
-  if (!["requested", "routed"].includes(row.status)) {
-    res.status(409).json({ error: "Only requested/finding rows can be assigned." });
+  if (row.status !== "pending") {
+    res.status(409).json({ error: "Only pending assigned requests can link inventory copies." });
     return;
   }
   const normalized = normalizeBookTitle(row.bookTitle ?? "");
@@ -36839,7 +37165,7 @@ router5.post("/:id/assign-copy", authMiddleware, requireAuth, async (req, res) =
   const candidates = await db.select({ id: books.id, title: books.title }).from(books).where(and(eq(books.hubId, row.hubId), eq(books.status, "available"))).limit(250);
   const match = candidates.find((c) => normalizeBookTitle(c.title) === normalized);
   if (!match) {
-    res.status(409).json({ error: "No available copies \u2014 add to inventory or wait." });
+    res.status(409).json({ error: "No available copies \u2014 add to inventory first." });
     return;
   }
   const ok = await db.transaction(
@@ -36868,7 +37194,10 @@ router5.post("/:id/assign-copy", authMiddleware, requireAuth, async (req, res) =
   });
   const [fresh] = await db.select().from(bookRequests).where(eq(bookRequests.id, row.id)).limit(1);
   const [request] = await withReassignMeta([fresh ?? row]);
-  res.json({ request, warning: parsed.data.assignmentVerified ? null : "Not shelf verified \u2014 pickup may fail." });
+  res.json({
+    request: serializeRequest(request),
+    warning: parsed.data.assignmentVerified ? null : "Not shelf verified \u2014 pickup may fail."
+  });
 });
 router5.post("/:id/release-assignment", authMiddleware, requireAuth, async (req, res) => {
   const auth = req.auth;
@@ -36882,7 +37211,7 @@ router5.post("/:id/release-assignment", authMiddleware, requireAuth, async (req,
     res.status(404).json({ error: "Not found" });
     return;
   }
-  if (!row.assignedCopyId) {
+  if (!row.assignedCopyId || !row.hubId) {
     res.status(409).json({ error: "No assigned copy to release." });
     return;
   }
@@ -36896,12 +37225,10 @@ router5.post("/:id/release-assignment", authMiddleware, requireAuth, async (req,
   await db.transaction(async (tx) => {
     await releaseReservedCopyToAvailable(tx, row.assignedCopyId, "released");
     await tx.update(bookRequests).set({
-      status: "routed",
       assignedCopyId: null,
       assignmentVerified: false,
       assignedAt: null,
       assignedBy: null,
-      readyAt: null,
       updatedAt: /* @__PURE__ */ new Date()
     }).where(eq(bookRequests.id, row.id));
   });
@@ -36916,7 +37243,7 @@ router5.post("/:id/release-assignment", authMiddleware, requireAuth, async (req,
   });
   const [fresh] = await db.select().from(bookRequests).where(eq(bookRequests.id, row.id)).limit(1);
   const [request] = await withReassignMeta([fresh ?? row]);
-  res.json({ request });
+  res.json({ request: serializeRequest(request) });
 });
 router5.post("/:id/verify-assignment", authMiddleware, requireAuth, async (req, res) => {
   const auth = req.auth;
@@ -36926,7 +37253,7 @@ router5.post("/:id/verify-assignment", authMiddleware, requireAuth, async (req, 
     return;
   }
   const [row] = await db.select().from(bookRequests).where(eq(bookRequests.id, id)).limit(1);
-  if (!row) {
+  if (!row || !row.hubId) {
     res.status(404).json({ error: "Not found" });
     return;
   }
@@ -36941,10 +37268,6 @@ router5.post("/:id/verify-assignment", authMiddleware, requireAuth, async (req, 
     res.status(409).json({ error: "No assigned copy to verify." });
     return;
   }
-  if (!["fulfilled", "ready"].includes(row.status)) {
-    res.status(409).json({ error: "Can only verify for fulfilled or ready requests." });
-    return;
-  }
   const [updated] = await db.update(bookRequests).set({ assignmentVerified: true, updatedAt: /* @__PURE__ */ new Date() }).where(eq(bookRequests.id, id)).returning();
   await logAudit({
     userId: auth.userId,
@@ -36956,240 +37279,7 @@ router5.post("/:id/verify-assignment", authMiddleware, requireAuth, async (req, 
     meta: { assignedCopyId: row.assignedCopyId }
   });
   const [request] = await withReassignMeta([updated ?? row]);
-  res.json({ request });
-});
-router5.patch("/:id", authMiddleware, requireAuth, async (req, res) => {
-  const auth = req.auth;
-  const id = pathParam(req.params["id"]);
-  if (!id) {
-    res.status(400).json({ error: "Missing id" });
-    return;
-  }
-  const parsed = patchSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({
-      error: "Invalid body. Hub staff may advance: routed, ready (after a copy is fulfilled), or picked."
-    });
-    return;
-  }
-  if (!parsed.data.status) {
-    res.status(400).json({
-      error: "Missing status. Hub staff may advance: routed, ready (after a copy is fulfilled), or picked."
-    });
-    return;
-  }
-  const nextStatus = parsed.data.status;
-  const [row] = await db.select().from(bookRequests).where(eq(bookRequests.id, id)).limit(1);
-  if (!row) {
-    res.status(404).json({ error: "Not found" });
-    return;
-  }
-  try {
-    requireHubStaff(auth, row.hubId);
-  } catch {
-    await logAudit({
-      userId: auth.userId,
-      hubId: row.hubId,
-      action: "BOOK_REQUEST_PATCH",
-      resourceId: id,
-      denial: true
-    });
-    res.status(403).json({
-      error: "Only hub staff for this hub can update request status."
-    });
-    return;
-  }
-  try {
-    await requireActiveHub(db, row.hubId);
-  } catch {
-    res.status(403).json({ error: "This hub is inactive." });
-    return;
-  }
-  if (isTerminalBookRequest(row.status)) {
-    res.status(409).json({ error: "This request is already completed, expired, or cancelled." });
-    return;
-  }
-  if (nextStatus === "ready" && row.status !== "fulfilled") {
-    res.status(409).json({
-      error: "Mark \u201Cready\u201D only after a copy is assigned (status must be fulfilled)."
-    });
-    return;
-  }
-  if (!isValidStaffBookRequestTransition(row.status, nextStatus)) {
-    res.status(409).json({
-      error: `Invalid status change (${row.status} \u2192 ${nextStatus}).`
-    });
-    return;
-  }
-  if (nextStatus === "picked") {
-    if (!row.assignedCopyId) {
-      res.status(409).json({
-        error: "Pickup requires an assigned copy (request must be fulfilled first)."
-      });
-      return;
-    }
-    if (row.status !== "ready" || row.assignmentVerified === false) {
-      await logAudit({
-        userId: auth.userId,
-        actorId: auth.userId,
-        hubId: row.hubId,
-        action: "pickup_blocked_unverified",
-        resourceType: "book_request",
-        resourceId: row.id,
-        denial: true,
-        meta: { assignedCopyId: row.assignedCopyId }
-      });
-      res.status(409).json({
-        error: "Verify the copy on shelf before completing pickup."
-      });
-      return;
-    }
-  }
-  let updated;
-  try {
-    [updated] = await db.transaction(async (tx) => {
-      await tx.execute(sql`SELECT id FROM book_requests WHERE id = ${id}::uuid FOR UPDATE`);
-      const [freshRow] = await tx.select().from(bookRequests).where(eq(bookRequests.id, id)).limit(1);
-      if (!freshRow || isTerminalBookRequest(freshRow.status)) {
-        const err = new Error("STALE_REQUEST");
-        err.status = 409;
-        throw err;
-      }
-      if (nextStatus === "picked" && freshRow.assignedCopyId) {
-        await tx.execute(
-          sql`SELECT id FROM books WHERE id = ${freshRow.assignedCopyId}::uuid FOR UPDATE`
-        );
-        const [copy] = await tx.select().from(books).where(eq(books.id, freshRow.assignedCopyId)).limit(1);
-        if (!copy || copy.status !== "reserved") {
-          const err = new Error("COPY_NOT_RESERVED");
-          err.status = 409;
-          throw err;
-        }
-        const [bUpd] = await tx.update(books).set({
-          status: "checked_out",
-          borrowerUserId: freshRow.userId,
-          dueAt: checkoutDueAt(),
-          updatedAt: /* @__PURE__ */ new Date()
-        }).where(and(eq(books.id, freshRow.assignedCopyId), eq(books.status, "reserved"))).returning({ id: books.id });
-        if (!bUpd) {
-          const err = new Error("PICKUP_RACE");
-          err.status = 409;
-          throw err;
-        }
-      }
-      const [u] = await tx.update(bookRequests).set({
-        status: parsed.data.status,
-        updatedAt: /* @__PURE__ */ new Date(),
-        readyAt: parsed.data.status === "ready" ? /* @__PURE__ */ new Date() : freshRow.readyAt
-      }).where(eq(bookRequests.id, id)).returning();
-      if (!u) {
-        const err = new Error("STALE_REQUEST");
-        err.status = 409;
-        throw err;
-      }
-      if (parsed.data.status === "routed") {
-        await tryAssignAvailableCopiesForDeskTitle(tx, freshRow.hubId, freshRow.bookTitle, {
-          preferRequestId: id,
-          preferOnly: true
-        });
-        const [afterAssign] = await tx.select().from(bookRequests).where(eq(bookRequests.id, id)).limit(1);
-        return [afterAssign ?? u];
-      }
-      return [u];
-    });
-  } catch (e) {
-    const err = e;
-    if (err.message === "STALE_REQUEST") {
-      res.status(409).json({ error: "This request changed. Refresh and try again." });
-      return;
-    }
-    if (err.message === "COPY_NOT_RESERVED") {
-      res.status(409).json({
-        error: "The assigned copy is not in reserved status. It may have been released\u2014refresh and reassign."
-      });
-      return;
-    }
-    if (err.message === "PICKUP_RACE") {
-      res.status(409).json({ error: "Another action updated this copy. Refresh and try again." });
-      return;
-    }
-    throw e;
-  }
-  const fixed = updated;
-  await logAudit({
-    userId: auth.userId,
-    actorId: auth.userId,
-    hubId: row.hubId,
-    action: "BOOK_REQUEST_STATUS",
-    resourceType: "book_request",
-    resourceId: id,
-    meta: {
-      from: row.status,
-      to: parsed.data.status,
-      resultingStatus: fixed.status,
-      requestUserId: row.userId,
-      bookTitle: row.bookTitle ?? null
-    }
-  });
-  const label = fixed.bookTitle?.trim() || "a title you requested";
-  if (parsed.data.status === "routed" && fixed.status === "routed") {
-    await notifyUser({
-      userId: row.userId,
-      kind: "book_request_routed",
-      body: `Your request for \u201C${label}\u201D was routed at the hub.`,
-      bookRequestId: row.id
-    });
-  }
-  if (parsed.data.status === "ready") {
-    await notifyUser({
-      userId: row.userId,
-      kind: "book_request_ready",
-      body: `Your request for \u201C${label}\u201D is ready for pickup.`,
-      bookRequestId: row.id
-    });
-  }
-  if (parsed.data.status === "picked") {
-    await notifyUser({
-      userId: row.userId,
-      kind: "book_request_picked",
-      body: `Pickup recorded for \u201C${label}\u201D.`,
-      bookRequestId: row.id
-    });
-  }
-  await recordLifecycleEvent({
-    type: "request_status_changed",
-    userId: row.userId,
-    hubId: row.hubId,
-    bookId: fixed.assignedCopyId,
-    metadata: { requestId: row.id, from: row.status, to: fixed.status }
-  });
-  if (parsed.data.status === "ready") {
-    await logAudit({
-      userId: auth.userId,
-      actorId: auth.userId,
-      hubId: fixed.hubId,
-      action: "BOOK_REQUEST_MARK_READY",
-      resourceType: "book_request",
-      resourceId: id,
-      meta: {
-        note: "fulfilled = system reserved copy; ready = physically available for member pickup",
-        priorStatus: row.status
-      }
-    });
-  }
-  if (parsed.data.status === "picked") {
-    await logAudit({
-      userId: auth.userId,
-      actorId: auth.userId,
-      hubId: fixed.hubId,
-      action: "pickup_completed",
-      resourceType: "book_request",
-      resourceId: id,
-      meta: { assignedCopyId: fixed.assignedCopyId }
-    });
-  }
-  const [request] = await withReassignMeta([fixed]);
-  res.json({ request });
+  res.json({ request: serializeRequest(request) });
 });
 var book_requests_default = router5;
 
@@ -37223,7 +37313,7 @@ var createSchema2 = external_exports.object({
 var p2pBuyBodySchema = external_exports.object({
   acquireForHubId: external_exports.string().uuid().optional()
 });
-var patchSchema2 = external_exports.object({
+var patchSchema = external_exports.object({
   bookTitle: external_exports.string().min(1).optional(),
   price: external_exports.number().int().min(1).optional(),
   borrowPrice: external_exports.number().int().min(0).optional(),
@@ -37298,7 +37388,7 @@ router7.patch("/listings/:id", authMiddleware, requireAuth, async (req, res) => 
     res.status(400).json({ error: "Missing id" });
     return;
   }
-  const parsed = patchSchema2.safeParse(req.body);
+  const parsed = patchSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid body" });
     return;
@@ -37614,6 +37704,31 @@ router7.post("/listings/:id/borrow", authMiddleware, requireAuth, async (req, re
         err.status = 409;
         throw err;
       }
+      const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, auth.userId)).limit(1);
+      if (!wallet) throw new Error("NO_WALLET");
+      const [sub] = await tx.select().from(subscriptions).where(eq(subscriptions.userId, auth.userId)).limit(1);
+      const isPremium = sub?.status === "active" && sub.premiumUntil > /* @__PURE__ */ new Date();
+      if (!isPremium) {
+        if (wallet.balance < listing.borrowPrice) {
+          const err = new Error("INSUFFICIENT_CREDITS");
+          err.status = 402;
+          throw err;
+        }
+        await tx.update(wallets).set({ balance: wallet.balance - listing.borrowPrice, updatedAt: /* @__PURE__ */ new Date() }).where(eq(wallets.id, wallet.id));
+        await tx.insert(walletTransactions).values({
+          walletId: wallet.id,
+          type: "debit",
+          amount: listing.borrowPrice,
+          description: `Borrowed P2P book: ${listing.bookTitle}`
+        });
+      } else {
+        await tx.insert(walletTransactions).values({
+          walletId: wallet.id,
+          type: "debit",
+          amount: 0,
+          description: `Premium Benefit Applied. Borrowed P2P book: ${listing.bookTitle}`
+        });
+      }
       const now = /* @__PURE__ */ new Date();
       const [bUpd] = await tx.update(books).set({
         status: "checked_out",
@@ -37684,6 +37799,14 @@ router7.post("/listings/:id/borrow", authMiddleware, requireAuth, async (req, re
     }
     if (err.message === "HUB_INACTIVE") {
       res.status(403).json({ error: "This hub is inactive." });
+      return;
+    }
+    if (err.message === "INSUFFICIENT_CREDITS") {
+      res.status(402).json({ error: "Insufficient credits to borrow this book." });
+      return;
+    }
+    if (err.message === "NO_WALLET") {
+      res.status(404).json({ error: "Wallet not found for this user." });
       return;
     }
     throw e;
@@ -37972,12 +38095,9 @@ import { Router as Router8 } from "express";
 
 // src/lib/hub-overview.ts
 var REQUEST_BREAKDOWN_STATUSES = [
-  "requested",
-  "routed",
-  "fulfilled",
-  "ready",
-  "picked",
-  "expired",
+  "pending",
+  "available_for_collection",
+  "delivered",
   "cancelled"
 ];
 var TRANSACTION_ACTIONS = [
@@ -38022,11 +38142,10 @@ function computeSuperAdminDerivatives(m, requestBreakdown, range) {
   const inCirc = m.available + m.checkedOut + m.reserved;
   const shelfUtilizationPct = inCirc > 0 ? Math.min(100, Math.round(100 * m.checkedOut / inCirc)) : 0;
   const transactionsPerDay = periodLabelDays > 0 ? m.transactionsInRange / periodLabelDays : 0;
-  const picked = requestBreakdown["picked"] ?? 0;
-  const expired = requestBreakdown["expired"] ?? 0;
+  const delivered = requestBreakdown["delivered"] ?? 0;
   const cancelled = requestBreakdown["cancelled"] ?? 0;
-  const terminal = picked + expired + cancelled;
-  const requestTerminalSuccessPct = terminal > 0 ? Math.min(100, Math.round(100 * picked / terminal)) : null;
+  const terminal = delivered + cancelled;
+  const requestTerminalSuccessPct = terminal > 0 ? Math.min(100, Math.round(100 * delivered / terminal)) : null;
   const p2pDenom = m.p2pOnShelf + m.p2pPending;
   const p2pDropoffBacklogRatio = p2pDenom > 0 ? m.p2pPending / p2pDenom : 0;
   return {
@@ -38057,8 +38176,8 @@ async function computeHubAttentionRanks(hubIds) {
     const a = byHub.get(row.hubId);
     if (!a) continue;
     const n = Number(row.n);
-    if (row.status === "requested" || row.status === "routed") a.pendingDesk += n;
-    if (row.status === "ready") a.readyPickup += n;
+    if (row.status === "pending") a.pendingDesk += n;
+    if (row.status === "available_for_collection") a.readyPickup += n;
   }
   const p2pRows = await db.select({ hubId: p2pListings.hubId, status: p2pListings.status, n: count() }).from(p2pListings).where(inArray(p2pListings.hubId, hubIds)).groupBy(p2pListings.hubId, p2pListings.status);
   for (const row of p2pRows) {
@@ -38179,14 +38298,14 @@ async function buildHubOverviewPayload(hubIds, hubIdFilter, range) {
   const pendingRequestsRows = await db.select({ n: count() }).from(bookRequests).where(
     and(
       inArray(bookRequests.hubId, effective),
-      inArray(bookRequests.status, ["requested", "routed"])
+      eq(bookRequests.status, "pending")
     )
   );
   const pendingRequests = Number(pendingRequestsRows[0]?.n ?? 0);
   const readyPickupRows = await db.select({ n: count() }).from(bookRequests).where(
     and(
       inArray(bookRequests.hubId, effective),
-      eq(bookRequests.status, "ready")
+      eq(bookRequests.status, "available_for_collection")
     )
   );
   const readyForPickup = Number(readyPickupRows[0]?.n ?? 0);
@@ -38194,7 +38313,7 @@ async function buildHubOverviewPayload(hubIds, hubIdFilter, range) {
     and(
       inArray(auditLogs2.hubId, effective),
       eq(auditLogs2.action, "BOOK_REQUEST_STATUS"),
-      sql`(${auditLogs2.meta}->>'to') = 'fulfilled'`,
+      sql`(${auditLogs2.meta}->>'to') = 'available_for_collection'`,
       gte(auditLogs2.createdAt, dayStart),
       eq(auditLogs2.denial, false)
     )
@@ -38204,7 +38323,7 @@ async function buildHubOverviewPayload(hubIds, hubIdFilter, range) {
     and(
       inArray(auditLogs2.hubId, effective),
       eq(auditLogs2.action, "BOOK_REQUEST_STATUS"),
-      sql`(${auditLogs2.meta}->>'to') = 'fulfilled'`,
+      sql`(${auditLogs2.meta}->>'to') = 'available_for_collection'`,
       gte(auditLogs2.createdAt, periodStart),
       eq(auditLogs2.denial, false)
     )
@@ -38323,7 +38442,7 @@ async function buildHubOverviewPayload(hubIds, hubIdFilter, range) {
   const expiredRecentRows = await db.select({ n: count() }).from(bookRequests).where(
     and(
       inArray(bookRequests.hubId, effective),
-      eq(bookRequests.status, "expired"),
+      eq(bookRequests.status, "cancelled"),
       gte(bookRequests.updatedAt, overviewRangeStart("week"))
     )
   );
@@ -38350,6 +38469,41 @@ async function buildHubOverviewPayload(hubIds, hubIdFilter, range) {
       kind: "dropoffs",
       message: "Peer consignment drop-offs pending approval",
       count: p2pPending,
+      severity: "warning"
+    });
+  }
+  const bountyOpenRows = await db.select({ n: count() }).from(bountyRequests).where(
+    and(
+      inArray(bountyRequests.hubId, effective),
+      inArray(bountyRequests.status, ["open", "pending_student_delivery", "under_review"])
+    )
+  );
+  const bountyOpenRequests = Number(bountyOpenRows[0]?.n ?? 0);
+  const bountyPendingDeliveryRows = await db.select({ n: count() }).from(bountySubmissions).innerJoin(bountyRequests, eq(bountySubmissions.bountyRequestId, bountyRequests.id)).where(
+    and(
+      inArray(bountyRequests.hubId, effective),
+      inArray(bountySubmissions.status, ["submitted", "awaiting_drop_off", "delivered", "under_review"])
+    )
+  );
+  const bountyPendingDeliveries = Number(bountyPendingDeliveryRows[0]?.n ?? 0);
+  const bountyAcquiredRows = await db.select({ n: count() }).from(bountyAcquisitions).innerJoin(bountyRequests, eq(bountyAcquisitions.bountyRequestId, bountyRequests.id)).where(inArray(bountyRequests.hubId, effective));
+  const bountyBooksAcquired = Number(bountyAcquiredRows[0]?.n ?? 0);
+  const bountyFulfilledRows = await db.select({ n: count() }).from(bountyRequests).where(
+    and(inArray(bountyRequests.hubId, effective), eq(bountyRequests.status, "completed"))
+  );
+  const bountyFulfilledRequests = Number(bountyFulfilledRows[0]?.n ?? 0);
+  const bountyRewardRows = await db.select({ total: sql`coalesce(sum(${bountyRequests.rewardAmount} * ${bountyRequests.quantity}), 0)` }).from(bountyRequests).where(
+    and(
+      inArray(bountyRequests.hubId, effective),
+      inArray(bountyRequests.status, ["open", "pending_student_delivery", "under_review", "approved"])
+    )
+  );
+  const bountyTotalRewardValue = Number(bountyRewardRows[0]?.total ?? 0);
+  if (bountyPendingDeliveries > 0) {
+    alerts.push({
+      kind: "bounty_deliveries",
+      message: "Bounty book submissions awaiting review or delivery",
+      count: bountyPendingDeliveries,
       severity: "warning"
     });
   }
@@ -38397,6 +38551,11 @@ async function buildHubOverviewPayload(hubIds, hubIdFilter, range) {
       readyForPickup,
       p2pPending,
       p2pOnShelf,
+      bountyOpenRequests,
+      bountyBooksAcquired,
+      bountyPendingDeliveries,
+      bountyTotalRewardValue,
+      bountyFulfilledRequests,
       transactionsToday,
       transactionsInRange
     },
@@ -38434,6 +38593,13 @@ async function buildHubOverviewPayload(hubIds, hubIdFilter, range) {
         price: p.price,
         soldAt: p.soldAt?.toISOString() ?? null
       }))
+    },
+    bounty: {
+      openRequests: bountyOpenRequests,
+      booksAcquired: bountyBooksAcquired,
+      pendingDeliveries: bountyPendingDeliveries,
+      totalRewardValue: bountyTotalRewardValue,
+      fulfilledRequests: bountyFulfilledRequests
     },
     alerts
   };
@@ -38573,10 +38739,10 @@ async function buildHubCommercePayload(hubStaffHubIds, hubIdFilter, hubAccountUs
       [...inboundRows, ...outboundRows].map((r) => r.hubId).filter((id) => id != null && id.length > 0)
     )
   ];
-  const hubNameById = /* @__PURE__ */ new Map();
+  const hubNameById2 = /* @__PURE__ */ new Map();
   if (hubIds.length > 0) {
     const hh = await db.select({ id: hubs.id, name: hubs.name }).from(hubs).where(inArray(hubs.id, hubIds));
-    for (const h of hh) hubNameById.set(h.id, h.name);
+    for (const h of hh) hubNameById2.set(h.id, h.name);
   }
   const inbound = inboundRows.map((r) => {
     const title = titleForRow(r.resourceType, r.resourceId, titleByBookId, titleByListingId);
@@ -38585,7 +38751,7 @@ async function buildHubCommercePayload(hubStaffHubIds, hubIdFilter, hubAccountUs
       action: r.action,
       summary: inboundSummary(r.action, title),
       atHubId: r.hubId,
-      atHubName: r.hubId ? hubNameById.get(r.hubId) ?? null : null,
+      atHubName: r.hubId ? hubNameById2.get(r.hubId) ?? null : null,
       actorUserId: r.userId,
       resourceType: r.resourceType,
       resourceId: r.resourceId,
@@ -38599,7 +38765,7 @@ async function buildHubCommercePayload(hubStaffHubIds, hubIdFilter, hubAccountUs
       action: r.action,
       summary: outboundSummary(r.action, title),
       atHubId: r.hubId,
-      atHubName: r.hubId ? hubNameById.get(r.hubId) ?? null : null,
+      atHubName: r.hubId ? hubNameById2.get(r.hubId) ?? null : null,
       resourceType: r.resourceType,
       resourceId: r.resourceId,
       createdAt: r.createdAt.toISOString()
@@ -39305,7 +39471,7 @@ router8.get("/books", authMiddleware, requireAuth, async (req, res) => {
   const isSuper = auth.baseRole === "super_admin";
   const platformWide = isSuper && !hubIdParam && String(req.query["scope"] ?? "") === "platform";
   const sourceRaw = typeof req.query["source"] === "string" ? req.query["source"] : "all";
-  const sourceFilter = sourceRaw === "hub_inventory" || sourceRaw === "p2p" ? sourceRaw : null;
+  const sourceFilter = sourceRaw === "hub_inventory" || sourceRaw === "p2p" || sourceRaw === "bounty" ? sourceRaw : null;
   const statusRaw = typeof req.query["status"] === "string" ? req.query["status"] : void 0;
   const allowedStatuses = [
     "available",
@@ -39813,10 +39979,10 @@ router9.get("/timeline", authMiddleware, requireAuth, async (req, res) => {
     )
   ];
   const allHubIdsForNames = [.../* @__PURE__ */ new Set([...uniqueHubIds, ...fromHubIdsFromMeta])];
-  const hubNameById = /* @__PURE__ */ new Map();
+  const hubNameById2 = /* @__PURE__ */ new Map();
   if (allHubIdsForNames.length > 0) {
     const hh = await db.select({ id: hubs.id, name: hubs.name }).from(hubs).where(inArray(hubs.id, allHubIdsForNames));
-    for (const h of hh) hubNameById.set(h.id, h.name);
+    for (const h of hh) hubNameById2.set(h.id, h.name);
   }
   const events = rows.map((r) => {
     let title = null;
@@ -39827,11 +39993,11 @@ router9.get("/timeline", authMiddleware, requireAuth, async (req, res) => {
     return {
       id: r.id,
       action: r.action,
-      summary: transferS ?? activitySummary(r.action, title, r.meta ?? void 0, hubNameById),
+      summary: transferS ?? activitySummary(r.action, title, r.meta ?? void 0, hubNameById2),
       resourceType: r.resourceType,
       resourceId: r.resourceId,
       hubId: r.hubId,
-      hubName: r.hubId ? hubNameById.get(r.hubId) ?? null : null,
+      hubName: r.hubId ? hubNameById2.get(r.hubId) ?? null : null,
       category: eventCategory(r.action),
       createdAt: r.createdAt.toISOString()
     };
@@ -40180,13 +40346,13 @@ async function adminCloseBookRequest(params) {
     if (!fresh) {
       return { request: null, code: "not_found" };
     }
-    if (fresh.status === "picked") {
+    if (fresh.status === "delivered" || fresh.status === "picked") {
       return { request: null, code: "picked" };
     }
     if (isTerminalBookRequest(fresh.status)) {
       return { request: null, code: "terminal" };
     }
-    const copyId = fresh.assignedCopyId && (fresh.status === "fulfilled" || fresh.status === "ready") ? fresh.assignedCopyId : null;
+    const copyId = fresh.assignedCopyId && (fresh.status === "available_for_collection" || fresh.status === "fulfilled" || fresh.status === "ready") ? fresh.assignedCopyId : null;
     const [u] = await tx.update(bookRequests).set({
       status: outcome,
       assignedCopyId: null,
@@ -40244,7 +40410,7 @@ async function adminLinkCopyToRequest(params) {
     if (!row) {
       return { request: null, code: "not_found" };
     }
-    if (isTerminalBookRequest(row.status) || row.status === "picked") {
+    if (isTerminalBookRequest(row.status) || row.status === "picked" || row.status === "delivered") {
       return { request: null, code: "assign_rejected" };
     }
     const ok = await tryAssignCopyToBookRequest(tx, bookId, requestId, {
@@ -40302,7 +40468,7 @@ async function adminSetBookRequestStatus(params) {
     if (!row) {
       return { request: null, code: "not_found" };
     }
-    if (isTerminalBookRequest(row.status) || row.status === "picked") {
+    if (isTerminalBookRequest(row.status) || row.status === "picked" || row.status === "delivered") {
       return { request: null, code: "terminal" };
     }
     const from = row.status;
@@ -40446,7 +40612,7 @@ async function reassignBookRequestToHub(params) {
     if (!row) {
       return { request: null, previousHubId: null, reassigned: false, code: "not_found" };
     }
-    if (isTerminalBookRequest(row.status) || row.status === "picked") {
+    if (isTerminalBookRequest(row.status) || row.status === "picked" || row.status === "delivered") {
       return { request: null, previousHubId: null, reassigned: false, code: "bad_state" };
     }
     if (row.assignedCopyId) {
@@ -40464,7 +40630,7 @@ async function reassignBookRequestToHub(params) {
     } catch {
       return { request: null, previousHubId: null, reassigned: false, code: "inactive_hub" };
     }
-    if (!["requested", "routed"].includes(row.status)) {
+    if (row.status !== "pending" && row.status !== "requested" && row.status !== "routed") {
       return { request: null, previousHubId: null, reassigned: false, code: "bad_state" };
     }
     const title = row.bookTitle?.trim() || "";
@@ -41832,6 +41998,507 @@ router12.post("/verify", async (req, res) => {
 });
 var subscriptions_default = router12;
 
+// src/routes/student.ts
+import { Router as Router13 } from "express";
+var router13 = Router13();
+router13.get("/dashboard", requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT get_student_dashboard_data($1) AS data",
+      [req.auth.userId]
+    );
+    const data = rows[0]?.data;
+    res.json(data);
+  } catch (error) {
+    logger.error({ err: error }, "Dashboard error");
+    res.status(500).json({ error: "Failed to fetch dashboard data" });
+  }
+});
+var student_default = router13;
+
+// src/routes/bounty.ts
+import { Router as Router14 } from "express";
+var router14 = Router14();
+var BOUNTY_ACTIVE_STATUSES = [
+  "open",
+  "pending_student_delivery",
+  "under_review",
+  "approved"
+];
+var createBountySchema = external_exports.object({
+  hubId: external_exports.string().uuid(),
+  title: external_exports.string().min(1).max(500),
+  author: external_exports.string().max(300).optional(),
+  edition: external_exports.string().max(100).optional(),
+  department: external_exports.string().max(200).optional(),
+  semester: external_exports.string().max(100).optional(),
+  subject: external_exports.string().max(200).optional(),
+  isbn: external_exports.string().max(32).optional(),
+  quantity: external_exports.coerce.number().int().min(1).max(999).default(1),
+  rewardAmount: external_exports.coerce.number().int().min(0).default(0),
+  notes: external_exports.string().max(2e3).optional(),
+  expiryDate: external_exports.string().datetime().optional().nullable()
+});
+var updateBountySchema = createBountySchema.partial().extend({
+  status: external_exports.enum([
+    "open",
+    "paused",
+    "pending_student_delivery",
+    "under_review",
+    "approved",
+    "rejected",
+    "completed",
+    "closed"
+  ]).optional()
+}).omit({ hubId: true });
+var submitBountySchema = external_exports.object({
+  condition: external_exports.enum(["excellent", "good", "fair", "poor"]).default("good"),
+  edition: external_exports.string().max(100).optional(),
+  notes: external_exports.string().max(2e3).optional(),
+  photoUrls: external_exports.array(external_exports.string().url()).max(5).optional()
+});
+var submissionStatusSchema = external_exports.object({
+  status: external_exports.enum([
+    "awaiting_drop_off",
+    "under_review",
+    "approved",
+    "rejected",
+    "delivered"
+  ])
+});
+function serializeRequest2(row, hubName) {
+  return {
+    id: row.id,
+    hubId: row.hubId,
+    hubName: hubName ?? null,
+    title: row.title,
+    author: row.author,
+    edition: row.edition,
+    department: row.department,
+    semester: row.semester,
+    subject: row.subject,
+    isbn: row.isbn,
+    quantity: row.quantity,
+    rewardAmount: row.rewardAmount,
+    notes: row.notes,
+    expiryDate: row.expiryDate?.toISOString() ?? null,
+    status: row.status,
+    createdBy: row.createdBy,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString()
+  };
+}
+function serializeSubmission(row) {
+  return {
+    id: row.id,
+    bountyRequestId: row.bountyRequestId,
+    studentId: row.studentId,
+    condition: row.condition,
+    edition: row.edition,
+    notes: row.notes,
+    photoUrls: row.photoUrls ?? [],
+    status: row.status,
+    submittedAt: row.submittedAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString()
+  };
+}
+router14.get("/requests", authMiddleware, requireAuth, async (req, res) => {
+  const now = /* @__PURE__ */ new Date();
+  const rows = await db.select({
+    request: bountyRequests,
+    hubName: hubs.name
+  }).from(bountyRequests).innerJoin(hubs, eq(bountyRequests.hubId, hubs.id)).where(
+    and(
+      inArray(bountyRequests.status, [...BOUNTY_ACTIVE_STATUSES]),
+      or(
+        sql`${bountyRequests.expiryDate} IS NULL`,
+        gte(bountyRequests.expiryDate, now)
+      )
+    )
+  ).orderBy(desc(bountyRequests.createdAt));
+  res.json({
+    requests: rows.map((r) => serializeRequest2(r.request, r.hubName))
+  });
+});
+router14.get("/hub/requests", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  if (auth.hubStaffHubIds.length === 0) {
+    res.json({ requests: [] });
+    return;
+  }
+  const hubIdParam = typeof req.query["hubId"] === "string" ? req.query["hubId"] : void 0;
+  const effective = hubIdParam && auth.hubStaffHubIds.includes(hubIdParam) ? [hubIdParam] : auth.hubStaffHubIds;
+  const rows = await db.select({
+    request: bountyRequests,
+    hubName: hubs.name
+  }).from(bountyRequests).innerJoin(hubs, eq(bountyRequests.hubId, hubs.id)).where(inArray(bountyRequests.hubId, effective)).orderBy(desc(bountyRequests.updatedAt));
+  const requestIds = rows.map((r) => r.request.id);
+  let submissionCounts = {};
+  if (requestIds.length > 0) {
+    const counts = await db.select({
+      bountyRequestId: bountySubmissions.bountyRequestId,
+      n: count()
+    }).from(bountySubmissions).where(inArray(bountySubmissions.bountyRequestId, requestIds)).groupBy(bountySubmissions.bountyRequestId);
+    submissionCounts = Object.fromEntries(
+      counts.map((c) => [c.bountyRequestId, Number(c.n)])
+    );
+  }
+  res.json({
+    requests: rows.map((r) => ({
+      ...serializeRequest2(r.request, r.hubName),
+      submissionCount: submissionCounts[r.request.id] ?? 0
+    }))
+  });
+});
+router14.post("/hub/requests", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  const parsed = createBountySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid bounty request" });
+    return;
+  }
+  try {
+    requireHubStaff(auth, parsed.data.hubId);
+  } catch {
+    res.status(403).json({ error: "You don't manage that hub." });
+    return;
+  }
+  const [inserted] = await db.insert(bountyRequests).values({
+    hubId: parsed.data.hubId,
+    title: parsed.data.title.trim(),
+    author: parsed.data.author?.trim() || null,
+    edition: parsed.data.edition?.trim() || null,
+    department: parsed.data.department?.trim() || null,
+    semester: parsed.data.semester?.trim() || null,
+    subject: parsed.data.subject?.trim() || null,
+    isbn: parsed.data.isbn?.trim() || null,
+    quantity: parsed.data.quantity,
+    rewardAmount: parsed.data.rewardAmount,
+    notes: parsed.data.notes?.trim() || null,
+    expiryDate: parsed.data.expiryDate ? new Date(parsed.data.expiryDate) : null,
+    status: "open",
+    createdBy: auth.userId
+  }).returning();
+  await logAudit({
+    userId: auth.userId,
+    actorId: auth.userId,
+    hubId: parsed.data.hubId,
+    action: "BOUNTY_REQUEST_CREATED",
+    resourceType: "bounty_request",
+    resourceId: inserted.id,
+    meta: { title: parsed.data.title }
+  });
+  const hubRow = await db.query.hubs.findFirst({ where: eq(hubs.id, parsed.data.hubId) });
+  res.status(201).json({ request: serializeRequest2(inserted, hubRow?.name) });
+});
+router14.patch("/hub/requests/:id", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  const id = pathParam(req.params["id"]);
+  if (!id) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const parsed = updateBountySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid update" });
+    return;
+  }
+  const existing = await db.query.bountyRequests.findFirst({
+    where: eq(bountyRequests.id, id)
+  });
+  if (!existing) {
+    res.status(404).json({ error: "Bounty request not found" });
+    return;
+  }
+  try {
+    requireHubStaff(auth, existing.hubId);
+  } catch {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  const patch = {
+    updatedAt: /* @__PURE__ */ new Date()
+  };
+  if (parsed.data.title !== void 0) patch.title = parsed.data.title.trim();
+  if (parsed.data.author !== void 0) patch.author = parsed.data.author?.trim() || null;
+  if (parsed.data.edition !== void 0) patch.edition = parsed.data.edition?.trim() || null;
+  if (parsed.data.department !== void 0) patch.department = parsed.data.department?.trim() || null;
+  if (parsed.data.semester !== void 0) patch.semester = parsed.data.semester?.trim() || null;
+  if (parsed.data.subject !== void 0) patch.subject = parsed.data.subject?.trim() || null;
+  if (parsed.data.isbn !== void 0) patch.isbn = parsed.data.isbn?.trim() || null;
+  if (parsed.data.quantity !== void 0) patch.quantity = parsed.data.quantity;
+  if (parsed.data.rewardAmount !== void 0) patch.rewardAmount = parsed.data.rewardAmount;
+  if (parsed.data.notes !== void 0) patch.notes = parsed.data.notes?.trim() || null;
+  if (parsed.data.expiryDate !== void 0) {
+    patch.expiryDate = parsed.data.expiryDate ? new Date(parsed.data.expiryDate) : null;
+  }
+  if (parsed.data.status !== void 0) patch.status = parsed.data.status;
+  const [updated] = await db.update(bountyRequests).set(patch).where(eq(bountyRequests.id, id)).returning();
+  res.json({ request: serializeRequest2(updated) });
+});
+router14.get("/hub/requests/:id", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  const id = pathParam(req.params["id"]);
+  if (!id) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const row = await db.select({
+    request: bountyRequests,
+    hubName: hubs.name
+  }).from(bountyRequests).innerJoin(hubs, eq(bountyRequests.hubId, hubs.id)).where(eq(bountyRequests.id, id)).limit(1);
+  const item = row[0];
+  if (!item) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  try {
+    requireHubStaff(auth, item.request.hubId);
+  } catch {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  const submissions = await db.select({
+    submission: bountySubmissions,
+    studentName: users.name,
+    studentEmail: users.email
+  }).from(bountySubmissions).innerJoin(users, eq(bountySubmissions.studentId, users.id)).where(eq(bountySubmissions.bountyRequestId, id)).orderBy(desc(bountySubmissions.submittedAt));
+  res.json({
+    request: serializeRequest2(item.request, item.hubName),
+    submissions: submissions.map((s) => ({
+      ...serializeSubmission(s.submission),
+      studentName: s.studentName,
+      studentEmail: s.studentEmail
+    }))
+  });
+});
+router14.post("/requests/:id/submit", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  const id = pathParam(req.params["id"]);
+  if (!id) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const parsed = submitBountySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid submission" });
+    return;
+  }
+  const bounty = await db.query.bountyRequests.findFirst({
+    where: eq(bountyRequests.id, id)
+  });
+  if (!bounty || !BOUNTY_ACTIVE_STATUSES.includes(bounty.status)) {
+    res.status(404).json({ error: "Bounty not available" });
+    return;
+  }
+  const [submission] = await db.transaction(async (tx) => {
+    const [sub] = await tx.insert(bountySubmissions).values({
+      bountyRequestId: id,
+      studentId: auth.userId,
+      condition: parsed.data.condition,
+      edition: parsed.data.edition?.trim() || null,
+      notes: parsed.data.notes?.trim() || null,
+      photoUrls: parsed.data.photoUrls ?? [],
+      status: "submitted"
+    }).returning();
+    await tx.update(bountyRequests).set({
+      status: "pending_student_delivery",
+      updatedAt: /* @__PURE__ */ new Date()
+    }).where(eq(bountyRequests.id, id));
+    return [sub];
+  });
+  const hubRow = await db.query.hubs.findFirst({ where: eq(hubs.id, bounty.hubId) });
+  const staffRows = await db.select({ userId: memberships.userId }).from(memberships).where(eq(memberships.hubId, bounty.hubId));
+  await notifyUser({
+    userId: auth.userId,
+    kind: "bounty_submission_received",
+    body: `Your submission for "${bounty.title}" at ${hubRow?.name ?? "the hub"} is recorded. Await hub review.`
+  });
+  for (const staff of staffRows) {
+    await notifyUser({
+      userId: staff.userId,
+      kind: "bounty_new_submission",
+      body: `New bounty submission for "${bounty.title}" from a student.`
+    });
+  }
+  res.status(201).json({ submission: serializeSubmission(submission) });
+});
+router14.get("/my-submissions", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  const rows = await db.select({
+    submission: bountySubmissions,
+    request: bountyRequests,
+    hubName: hubs.name
+  }).from(bountySubmissions).innerJoin(bountyRequests, eq(bountySubmissions.bountyRequestId, bountyRequests.id)).innerJoin(hubs, eq(bountyRequests.hubId, hubs.id)).where(eq(bountySubmissions.studentId, auth.userId)).orderBy(desc(bountySubmissions.submittedAt));
+  res.json({
+    submissions: rows.map((r) => ({
+      ...serializeSubmission(r.submission),
+      bountyTitle: r.request.title,
+      bountyAuthor: r.request.author,
+      rewardAmount: r.request.rewardAmount,
+      hubName: r.hubName,
+      bountyStatus: r.request.status
+    }))
+  });
+});
+router14.patch("/hub/submissions/:id", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  const id = pathParam(req.params["id"]);
+  if (!id) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const parsed = submissionStatusSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid status" });
+    return;
+  }
+  const submission = await db.query.bountySubmissions.findFirst({
+    where: eq(bountySubmissions.id, id)
+  });
+  if (!submission) {
+    res.status(404).json({ error: "Submission not found" });
+    return;
+  }
+  const bounty = await db.query.bountyRequests.findFirst({
+    where: eq(bountyRequests.id, submission.bountyRequestId)
+  });
+  if (!bounty) {
+    res.status(404).json({ error: "Bounty not found" });
+    return;
+  }
+  try {
+    requireHubStaff(auth, bounty.hubId);
+  } catch {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  const [updated] = await db.update(bountySubmissions).set({ status: parsed.data.status, updatedAt: /* @__PURE__ */ new Date() }).where(eq(bountySubmissions.id, id)).returning();
+  let bountyStatus = bounty.status;
+  if (parsed.data.status === "approved") {
+    bountyStatus = "approved";
+    await notifyUser({
+      userId: submission.studentId,
+      kind: "bounty_submission_approved",
+      body: `Your submission for "${bounty.title}" was approved. Please visit the hub to deliver the book.`
+    });
+  } else if (parsed.data.status === "rejected") {
+    await notifyUser({
+      userId: submission.studentId,
+      kind: "bounty_submission_rejected",
+      body: `Your submission for "${bounty.title}" was not accepted.`
+    });
+  } else if (parsed.data.status === "awaiting_drop_off") {
+    bountyStatus = "pending_student_delivery";
+    await notifyUser({
+      userId: submission.studentId,
+      kind: "bounty_delivery_required",
+      body: `Please bring "${bounty.title}" to the hub for drop-off.`
+    });
+  } else if (parsed.data.status === "under_review") {
+    bountyStatus = "under_review";
+  } else if (parsed.data.status === "delivered") {
+    bountyStatus = "under_review";
+    await notifyUser({
+      userId: submission.studentId,
+      kind: "bounty_book_delivered",
+      body: `Hub received your copy of "${bounty.title}". Awaiting final review.`
+    });
+  }
+  await db.update(bountyRequests).set({ status: bountyStatus, updatedAt: /* @__PURE__ */ new Date() }).where(eq(bountyRequests.id, bounty.id));
+  res.json({ submission: serializeSubmission(updated) });
+});
+router14.post("/hub/submissions/:id/confirm-receipt", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  const id = pathParam(req.params["id"]);
+  if (!id) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const submission = await db.query.bountySubmissions.findFirst({
+    where: eq(bountySubmissions.id, id)
+  });
+  if (!submission) {
+    res.status(404).json({ error: "Submission not found" });
+    return;
+  }
+  const bounty = await db.query.bountyRequests.findFirst({
+    where: eq(bountyRequests.id, submission.bountyRequestId)
+  });
+  if (!bounty) {
+    res.status(404).json({ error: "Bounty not found" });
+    return;
+  }
+  try {
+    requireHubStaff(auth, bounty.hubId);
+  } catch {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  if (!["delivered", "under_review", "approved", "awaiting_drop_off"].includes(submission.status)) {
+    res.status(400).json({ error: "Submission not ready for inventory intake" });
+    return;
+  }
+  const result = await db.transaction(async (tx) => {
+    const [book] = await tx.insert(books).values({
+      refId: await nextBookRefId(),
+      title: bounty.title,
+      author: bounty.author,
+      isbn: bounty.isbn,
+      hubId: bounty.hubId,
+      source: "bounty",
+      status: "available",
+      condition: submission.condition,
+      buyPrice: 0,
+      borrowPrice: 0,
+      ownerId: submission.studentId
+    }).returning();
+    const [acquisition] = await tx.insert(bountyAcquisitions).values({
+      bountyRequestId: bounty.id,
+      bountySubmissionId: submission.id,
+      inventoryCopyId: book.id,
+      studentId: submission.studentId,
+      rewardAmount: bounty.rewardAmount
+    }).returning();
+    await tx.update(bountySubmissions).set({ status: "approved", updatedAt: /* @__PURE__ */ new Date() }).where(eq(bountySubmissions.id, id));
+    const acquiredCount = await tx.select({ n: count() }).from(bountyAcquisitions).where(eq(bountyAcquisitions.bountyRequestId, bounty.id));
+    const fulfilled = Number(acquiredCount[0]?.n ?? 0) >= bounty.quantity;
+    await tx.update(bountyRequests).set({
+      status: fulfilled ? "completed" : "open",
+      updatedAt: /* @__PURE__ */ new Date()
+    }).where(eq(bountyRequests.id, bounty.id));
+    await tryAssignCopyToWaitingRequests(tx, {
+      id: book.id,
+      hubId: book.hubId,
+      title: book.title
+    });
+    return { book, acquisition };
+  });
+  await logAudit({
+    userId: auth.userId,
+    actorId: auth.userId,
+    hubId: bounty.hubId,
+    action: "BOUNTY_ACQUISITION",
+    resourceType: "book",
+    resourceId: result.book.id,
+    meta: {
+      bountyRequestId: bounty.id,
+      bountySubmissionId: submission.id,
+      rewardAmount: bounty.rewardAmount
+    }
+  });
+  await notifyUser({
+    userId: submission.studentId,
+    kind: "bounty_added_to_inventory",
+    body: `"${bounty.title}" was added to hub inventory. Reward: \u20B9${bounty.rewardAmount.toLocaleString("en-IN")}.`
+  });
+  res.json({
+    book: result.book,
+    acquisition: result.acquisition
+  });
+});
+var bounty_default = router14;
+
 // src/lib/book-cover-storage.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import fs3 from "node:fs/promises";
@@ -41898,29 +42565,31 @@ async function saveBookCoverImage(opts) {
 }
 
 // src/routes/index.ts
-var router13 = Router13();
-router13.get("/placeholder-book-cover-url", (req, res) => {
+var router15 = Router15();
+router15.get("/placeholder-book-cover-url", (req, res) => {
   res.json({ url: getPlaceholderBookCoverPublicUrl() });
 });
-router13.use(health_default);
-router13.use("/auth", auth_default);
-router13.use("/catalog", catalog_default);
-router13.use("/p2p", p2p_default);
-router13.use(requireAuth);
-router13.use("/books", books_default);
-router13.use("/book-requests", book_requests_default);
-router13.use("/notifications", notifications_default);
-router13.use("/hub", hub_default);
-router13.use("/activity", activity_default);
-router13.use("/admin", admin_default);
-router13.use("/wallet", wallet_default);
-router13.use("/subscriptions", subscriptions_default);
-var routes_default = router13;
+router15.use(health_default);
+router15.use("/auth", auth_default);
+router15.use("/catalog", catalog_default);
+router15.use("/p2p", p2p_default);
+router15.use(requireAuth);
+router15.use("/books", books_default);
+router15.use("/book-requests", book_requests_default);
+router15.use("/notifications", notifications_default);
+router15.use("/hub", hub_default);
+router15.use("/activity", activity_default);
+router15.use("/admin", admin_default);
+router15.use("/wallet", wallet_default);
+router15.use("/subscriptions", subscriptions_default);
+router15.use("/student", student_default);
+router15.use("/bounty", bounty_default);
+var routes_default = router15;
 
 // src/routes/uploads.ts
-import { Router as Router14 } from "express";
+import { Router as Router16 } from "express";
 import multer from "multer";
-var router14 = Router14();
+var router16 = Router16();
 var allowed = /* @__PURE__ */ new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 var upload = multer({
   storage: multer.memoryStorage(),
@@ -41933,7 +42602,7 @@ var upload = multer({
     cb(new Error("Only JPEG, PNG, WebP, or GIF images are allowed."));
   }
 });
-router14.post("/book-cover", requireAuth, (req, res) => {
+router16.post("/book-cover", requireAuth, (req, res) => {
   upload.single("image")(req, res, (err) => {
     void (async () => {
       if (err) {
@@ -41959,7 +42628,7 @@ router14.post("/book-cover", requireAuth, (req, res) => {
     })();
   });
 });
-router14.post("/profile-image", requireAuth, (req, res) => {
+router16.post("/profile-image", requireAuth, (req, res) => {
   upload.single("image")(req, res, (err) => {
     void (async () => {
       if (err) {
@@ -41991,7 +42660,7 @@ router14.post("/profile-image", requireAuth, (req, res) => {
     })();
   });
 });
-var uploads_default = router14;
+var uploads_default = router16;
 
 // src/middleware/api-rate-limit.ts
 var buckets = /* @__PURE__ */ new Map();

@@ -783,7 +783,9 @@ router.get("/books", authMiddleware, requireAuth, async (req, res) => {
 
   const sourceRaw = typeof req.query["source"] === "string" ? req.query["source"] : "all";
   const sourceFilter =
-    sourceRaw === "hub_inventory" || sourceRaw === "p2p" ? sourceRaw : null;
+    sourceRaw === "hub_inventory" || sourceRaw === "p2p" || sourceRaw === "bounty"
+      ? sourceRaw
+      : null;
 
   const statusRaw = typeof req.query["status"] === "string" ? req.query["status"] : undefined;
   const allowedStatuses = [
