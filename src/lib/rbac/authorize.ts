@@ -26,7 +26,6 @@ export function authorize(
   const premiumAllowed =
     action === ACTIONS.CHECKOUT_BOOK ||
     action === ACTIONS.PURCHASE_BOOK ||
-    action === ACTIONS.REQUEST_BOOK ||
     action === ACTIONS.CREATE_P2P_LISTING ||
     action === ACTIONS.BUY_P2P ||
     action === ACTIONS.BORROW_P2P;
@@ -81,5 +80,6 @@ export function canManageBookRequest(
 ): boolean {
   if (user.baseRole === "super_admin") return true;
   if (resource.userId === user.userId) return true;
+  if (!resource.hubId) return user.hubStaffHubIds.length > 0;
   return isHubStaff(user, resource.hubId);
 }

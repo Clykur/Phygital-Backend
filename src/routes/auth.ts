@@ -22,6 +22,12 @@ router.post("/register", async (req, res) => {
     return;
   }
   const { name, email, password } = parsed.data;
+  const isPremium = parsed.data.isPremium;
+  if (isPremium) {
+    res.status(400).json({ error: "Premium subscriptions will be available soon.\nOnline payment integration is currently under development.\nPlease register using the Free plan." });
+    return;
+  }
+
   const accountType = parsed.data.accountType ?? "student";
   const existing = await db.select().from(users).where(eq(users.email, email)).limit(1);
   if (existing.length > 0) {
@@ -55,7 +61,7 @@ router.post("/register", async (req, res) => {
       // Provision wallet
       await tx.insert(wallets).values({
         userId: row.id,
-        balance: 0,
+        balance: 5000,
       });
 
       // Set default subscription
@@ -203,7 +209,7 @@ router.post("/google", async (req, res) => {
         // Provision wallet
         await tx.insert(wallets).values({
           userId: row.id,
-          balance: 0,
+          balance: 5000,
         });
 
         // Set default subscription

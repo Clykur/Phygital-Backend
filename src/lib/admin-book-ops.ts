@@ -34,7 +34,7 @@ export async function adminCloseBookRequest(params: {
     if (!fresh) {
       return { request: null, code: "not_found" as const };
     }
-    if (fresh.status === "picked") {
+    if (fresh.status === "delivered" || fresh.status === "picked") {
       return { request: null, code: "picked" as const };
     }
     if (isTerminalBookRequest(fresh.status)) {
@@ -42,7 +42,8 @@ export async function adminCloseBookRequest(params: {
     }
 
     const copyId =
-      fresh.assignedCopyId && (fresh.status === "fulfilled" || fresh.status === "ready")
+      fresh.assignedCopyId &&
+        (fresh.status === "available_for_collection" || fresh.status === "fulfilled" || fresh.status === "ready")
         ? fresh.assignedCopyId
         : null;
 
@@ -120,7 +121,7 @@ export async function adminLinkCopyToRequest(params: {
     if (!row) {
       return { request: null, code: "not_found" as const };
     }
-    if (isTerminalBookRequest(row.status) || row.status === "picked") {
+    if (isTerminalBookRequest(row.status) || row.status === "picked" || row.status === "delivered") {
       return { request: null, code: "assign_rejected" as const };
     }
     const ok = await tryAssignCopyToBookRequest(tx, bookId, requestId, {
@@ -193,7 +194,7 @@ export async function adminSetBookRequestStatus(params: {
     if (!row) {
       return { request: null, code: "not_found" };
     }
-    if (isTerminalBookRequest(row.status) || row.status === "picked") {
+    if (isTerminalBookRequest(row.status) || row.status === "picked" || row.status === "delivered") {
       return { request: null, code: "terminal" };
     }
     const from = row.status;
@@ -391,7 +392,7 @@ export async function reassignBookRequestToHub(params: {
     if (!row) {
       return { request: null, previousHubId: null, reassigned: false, code: "not_found" as const };
     }
-    if (isTerminalBookRequest(row.status) || row.status === "picked") {
+    if (isTerminalBookRequest(row.status) || row.status === "picked" || row.status === "delivered") {
       return { request: null, previousHubId: null, reassigned: false, code: "bad_state" as const };
     }
     if (row.assignedCopyId) {
@@ -409,7 +410,7 @@ export async function reassignBookRequestToHub(params: {
     } catch {
       return { request: null, previousHubId: null, reassigned: false, code: "inactive_hub" as const };
     }
-    if (!["requested", "routed"].includes(row.status)) {
+    if (row.status !== "pending" && row.status !== "requested" && row.status !== "routed") {
       return { request: null, previousHubId: null, reassigned: false, code: "bad_state" as const };
     }
     const title = row.bookTitle?.trim() || "";

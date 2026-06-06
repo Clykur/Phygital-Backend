@@ -37,7 +37,7 @@ export async function expireStaleReadyBookRequests(): Promise<number> {
     .from(bookRequests)
     .where(
       and(
-        eq(bookRequests.status, "ready"),
+        eq(bookRequests.status, "available_for_collection"),
         isNotNull(bookRequests.readyAt),
         lt(bookRequests.readyAt, cutoff),
       ),
@@ -51,7 +51,7 @@ export async function expireStaleReadyBookRequests(): Promise<number> {
       await tx
         .update(bookRequests)
         .set({
-          status: "expired",
+          status: "cancelled",
           assignedCopyId: null,
           assignmentVerified: false,
           assignedAt: null,
@@ -74,7 +74,7 @@ export async function expireStaleReadyBookRequests(): Promise<number> {
     const label = row.bookTitle?.trim() || "your request";
     await notifyUser({
       userId: row.userId,
-      kind: "book_request_expired",
+      kind: "book_request_cancelled",
       body: `Your pickup window for “${label}” closed. The copy was returned to the shelf.`,
       bookRequestId: row.id,
     });
@@ -103,7 +103,7 @@ export async function expireStaleFulfilledBookRequests(): Promise<number> {
     .from(bookRequests)
     .where(
       and(
-        eq(bookRequests.status, "fulfilled"),
+        eq(bookRequests.status, "available_for_collection"),
         isNotNull(bookRequests.assignedCopyId),
         lt(bookRequests.updatedAt, cutoff),
       ),
@@ -118,7 +118,7 @@ export async function expireStaleFulfilledBookRequests(): Promise<number> {
       await tx
         .update(bookRequests)
         .set({
-          status: "expired",
+          status: "cancelled",
           assignedCopyId: null,
           assignmentVerified: false,
           assignedAt: null,
@@ -139,7 +139,7 @@ export async function expireStaleFulfilledBookRequests(): Promise<number> {
     const label = row.bookTitle?.trim() || "your request";
     await notifyUser({
       userId: row.userId,
-      kind: "book_request_expired",
+      kind: "book_request_cancelled",
       body: `Your reserved copy for “${label}” timed out before pickup was opened. The copy was returned to the queue.`,
       bookRequestId: row.id,
     });
@@ -164,12 +164,12 @@ export async function expireStaleRequestedBookRequests(): Promise<number> {
   const updated = await db
     .update(bookRequests)
     .set({
-      status: "expired",
+      status: "cancelled",
       updatedAt: now,
     })
     .where(
       and(
-        eq(bookRequests.status, "requested"),
+        eq(bookRequests.status, "pending"),
         isNotNull(bookRequests.expiresAt),
         lt(bookRequests.expiresAt, now),
       ),
@@ -190,7 +190,7 @@ export async function expireStaleRequestedBookRequests(): Promise<number> {
       const label = row.bookTitle?.trim() || "your request";
       await notifyUser({
         userId: row.userId,
-        kind: "book_request_expired",
+        kind: "book_request_cancelled",
         body: `Your request for “${label}” timed out before the hub could route it. Start a new request if you still need the book.`,
         bookRequestId: row.id,
       });
