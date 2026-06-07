@@ -247,6 +247,13 @@ router.post("/:bookId/purchase", authMiddleware, requireAuth, async (req, res) =
         (err as Error & { status: number }).status = 409;
         throw err;
       }
+      const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, auth.userId)).limit(1);
+      if (!wallet) throw new Error("NO_WALLET");
+      if (wallet.balance < book.buyPrice) {
+        const err = new Error("INSUFFICIENT_CREDITS");
+        (err as Error & { status: number }).status = 402;
+        throw err;
+      }
       if (acquireForHubId) {
         if (acquireForHubId === book.hubId) {
           const err = new Error("BAD_ACQUIRE");
@@ -295,6 +302,16 @@ router.post("/:bookId/purchase", authMiddleware, requireAuth, async (req, res) =
             transferPending: true,
           },
         });
+        await tx
+          .update(wallets)
+          .set({ balance: wallet.balance - book.buyPrice, updatedAt: now })
+          .where(eq(wallets.id, wallet.id));
+        await tx.insert(walletTransactions).values({
+          walletId: wallet.id,
+          type: "debit",
+          amount: book.buyPrice,
+          description: `Purchased hub stock: ${book.title}`,
+        });
         await notifyUser({
           userId: auth.userId,
           kind: "hub_purchase_confirmation",
@@ -325,6 +342,16 @@ router.post("/:bookId/purchase", authMiddleware, requireAuth, async (req, res) =
           resourceType: "book",
           resourceId: bookId,
           meta: { buyerId: auth.userId, buyPrice: book.buyPrice },
+        });
+        await tx
+          .update(wallets)
+          .set({ balance: wallet.balance - book.buyPrice, updatedAt: now })
+          .where(eq(wallets.id, wallet.id));
+        await tx.insert(walletTransactions).values({
+          walletId: wallet.id,
+          type: "debit",
+          amount: book.buyPrice,
+          description: `Purchased book: ${book.title}`,
         });
         await notifyUser({
           userId: auth.userId,
@@ -383,6 +410,14 @@ router.post("/:bookId/purchase", authMiddleware, requireAuth, async (req, res) =
     }
     if (err.message === "HUB_INACTIVE") {
       res.status(403).json({ error: "This hub is inactive." });
+      return;
+    }
+    if (err.message === "INSUFFICIENT_CREDITS") {
+      res.status(402).json({ error: "Insufficient credits to purchase this book." });
+      return;
+    }
+    if (err.message === "NO_WALLET") {
+      res.status(404).json({ error: "Wallet not found for this user." });
       return;
     }
     if (err.message === "HUB_FORBIDDEN") {

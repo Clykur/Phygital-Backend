@@ -1,21 +1,20 @@
 import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const hubTsPath = '/Users/karthiknaramala/Desktop/Phygital-Backend/src/routes/hub.ts';
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const hubTsPath = path.join(repoRoot, 'src/routes/hub.ts');
 let code = fs.readFileSync(hubTsPath, 'utf8');
 
-const regex = /router\.get\("\/students".*?export default router;/s;
-const newEndpoints = `router.get("/students", authMiddleware, requireAuth, async (req, res) => {
-  const auth = req.auth!;
-  if (auth.hubStaffHubIds.length === 0) {
-    res.status(403).json({ error: "Hub staff access required." });
-    return;
-  }
-  const hubId = typeof req.query["hubId"] === "string" ? req.query["hubId"] : auth.hubStaffHubIds[0];
-  if (!auth.hubStaffHubIds.includes(hubId) && auth.baseRole !== "super_admin") {
-    res.status(403).json({ error: "Forbidden" });
-    return;
-  }
+// add imports
+if (!code.includes("memberships,")) {
+  code = code.replace("  users,\n} from \"@workspace/db/schema\";", "  users,\n  memberships,\n  wallets,\n  walletTransactions,\n  userSubscriptions,\n  subscriptionPlans,\n  lifecycleEvents,\n} from \"@workspace/db/schema\";");
+}
 
+const endpoints = `
+
+router.get("/students", authMiddleware, requireAuth, requireActiveHub, requireHubStaff, async (req, res) => {
+  const currentHub = req.currentHub!;
   try {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 20;
@@ -29,7 +28,7 @@ const newEndpoints = `router.get("/students", authMiddleware, requireAuth, async
         plan: subscriptionPlans,
       })
       .from(memberships)
-      .where(and(eq(memberships.hubId, hubId), eq(memberships.role, "student")))
+      .where(and(eq(memberships.hubId, currentHub.id), eq(memberships.role, "student")))
       .innerJoin(users, eq(users.id, memberships.userId))
       .leftJoin(wallets, eq(wallets.userId, users.id))
       .leftJoin(userSubscriptions, eq(userSubscriptions.userId, users.id))
@@ -37,17 +36,20 @@ const newEndpoints = `router.get("/students", authMiddleware, requireAuth, async
       .limit(limit)
       .offset(offset);
 
+    // Calculate aggregations per student
     const result = await Promise.all(studentMemberships.map(async (row) => {
+      // Wallet tx
       let earned = 0;
       let spent = 0;
       if (row.wallet) {
         const txs = await db.select().from(walletTransactions).where(eq(walletTransactions.walletId, row.wallet.id));
-        txs.forEach((t: any) => {
+        txs.forEach(t => {
           if (t.type === 'credit') earned += t.amount;
           if (t.type === 'debit') spent += t.amount;
         });
       }
       
+      // Last activity
       const [lastEvt] = await db.select().from(lifecycleEvents)
         .where(eq(lifecycleEvents.userId, row.user.id))
         .orderBy(sql\`created_at DESC\`)
@@ -73,7 +75,7 @@ const newEndpoints = `router.get("/students", authMiddleware, requireAuth, async
     const [{ count: total }] = await db
       .select({ count: sql\`count(*)\`.mapWith(Number) })
       .from(memberships)
-      .where(and(eq(memberships.hubId, hubId), eq(memberships.role, "student")));
+      .where(and(eq(memberships.hubId, currentHub.id), eq(memberships.role, "student")));
 
     res.json({
       students: result,
@@ -85,23 +87,13 @@ const newEndpoints = `router.get("/students", authMiddleware, requireAuth, async
       }
     });
   } catch (error) {
-    logger.error("Error fetching hub students", { error, hubId });
+    logger.error("Error fetching hub students", { error, hubId: currentHub.id });
     res.status(500).json({ error: "Failed to fetch students" });
   }
 });
 
-router.get("/students/analytics", authMiddleware, requireAuth, async (req, res) => {
-  const auth = req.auth!;
-  if (auth.hubStaffHubIds.length === 0) {
-    res.status(403).json({ error: "Hub staff access required." });
-    return;
-  }
-  const hubId = typeof req.query["hubId"] === "string" ? req.query["hubId"] : auth.hubStaffHubIds[0];
-  if (!auth.hubStaffHubIds.includes(hubId) && auth.baseRole !== "super_admin") {
-    res.status(403).json({ error: "Forbidden" });
-    return;
-  }
-
+router.get("/students/analytics", authMiddleware, requireAuth, requireActiveHub, requireHubStaff, async (req, res) => {
+  const currentHub = req.currentHub!;
   try {
     const studentMemberships = await db
       .select({
@@ -111,7 +103,7 @@ router.get("/students/analytics", authMiddleware, requireAuth, async (req, res) 
         plan: subscriptionPlans,
       })
       .from(memberships)
-      .where(and(eq(memberships.hubId, hubId), eq(memberships.role, "student")))
+      .where(and(eq(memberships.hubId, currentHub.id), eq(memberships.role, "student")))
       .innerJoin(users, eq(users.id, memberships.userId))
       .leftJoin(wallets, eq(wallets.userId, users.id))
       .leftJoin(userSubscriptions, eq(userSubscriptions.userId, users.id))
@@ -130,7 +122,7 @@ router.get("/students/analytics", authMiddleware, requireAuth, async (req, res) 
       }
       if (row.wallet) {
         const txs = await db.select().from(walletTransactions).where(eq(walletTransactions.walletId, row.wallet.id));
-        txs.forEach((t: any) => {
+        txs.forEach(t => {
           if (t.type === 'credit') totalCreditsIssued += t.amount;
           if (t.type === 'debit') totalCreditsRedeemed += t.amount;
         });
@@ -150,12 +142,14 @@ router.get("/students/analytics", authMiddleware, requireAuth, async (req, res) 
       }
     });
   } catch (error) {
-    logger.error("Error fetching hub student analytics", { error, hubId });
+    logger.error("Error fetching hub student analytics", { error, hubId: currentHub.id });
     res.status(500).json({ error: "Failed to fetch student analytics" });
   }
 });
 
-export default router;`;
+export default router;
+`;
 
-code = code.replace(regex, newEndpoints);
+code = code.replace("export default router;", endpoints);
+
 fs.writeFileSync(hubTsPath, code);

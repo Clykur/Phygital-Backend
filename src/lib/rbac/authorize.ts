@@ -24,11 +24,7 @@ export function authorize(
   if (freeAllowed) return true;
 
   const premiumAllowed =
-    action === ACTIONS.CHECKOUT_BOOK ||
-    action === ACTIONS.PURCHASE_BOOK ||
-    action === ACTIONS.CREATE_P2P_LISTING ||
-    action === ACTIONS.BUY_P2P ||
-    action === ACTIONS.BORROW_P2P;
+    action === ACTIONS.CREATE_P2P_LISTING;
 
   if (premiumAllowed && !isPremiumOk(user)) return false;
 

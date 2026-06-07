@@ -6,7 +6,11 @@ import {
   integer,
   jsonb,
   boolean,
+  uniqueIndex,
+  index,
+  check,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -142,6 +146,37 @@ export const p2pListings = pgTable("p2p_listings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   soldAt: timestamp("sold_at", { withTimezone: true }),
 });
+
+export const recentBookViews = pgTable(
+  "recent_book_views",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    bookId: uuid("book_id").references(() => books.id, { onDelete: "cascade" }),
+    listingId: uuid("listing_id").references(() => p2pListings.id, {
+      onDelete: "cascade",
+    }),
+    viewedAt: timestamp("viewed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    recentBookViewsUserViewedAtIdx: index("recent_book_views_user_viewed_at_idx").on(
+      table.userId,
+      table.viewedAt,
+    ),
+    recentBookViewsUserBookUnique: uniqueIndex("recent_book_views_user_book_unique")
+      .on(table.userId, table.bookId)
+      .where(sql`${table.bookId} IS NOT NULL`),
+    recentBookViewsUserListingUnique: uniqueIndex("recent_book_views_user_listing_unique")
+      .on(table.userId, table.listingId)
+      .where(sql`${table.listingId} IS NOT NULL`),
+    recentBookViewsOneTargetCheck: check(
+      "recent_book_views_one_target_check",
+      sql`(${table.bookId} IS NOT NULL AND ${table.listingId} IS NULL) OR (${table.bookId} IS NULL AND ${table.listingId} IS NOT NULL)`,
+    ),
+  }),
+);
 
 export const bookRequests = pgTable("book_requests", {
   id: uuid("id").primaryKey().defaultRandom(),

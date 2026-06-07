@@ -2,10 +2,16 @@ import "dotenv/config";
 import { pool } from "@workspace/db";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 async function run() {
   try {
-    const sql = fs.readFileSync("../Phygital-Backend/supabase/migrations/20260606110000_student_dashboard_rpc.sql", "utf8");
+    const sql = fs.readFileSync(
+      path.join(repoRoot, "supabase/migrations/20260606110000_student_dashboard_rpc.sql"),
+      "utf8",
+    );
     await pool.query(sql);
     console.log("Migration applied successfully!");
     

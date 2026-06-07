@@ -752,6 +752,13 @@ router.post("/listings/:id/buy", authMiddleware, requireAuth, async (req, res) =
         (err as Error & { status: number }).status = 409;
         throw err;
       }
+      const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, auth.userId)).limit(1);
+      if (!wallet) throw new Error("NO_WALLET");
+      if (wallet.balance < listing.price) {
+        const err = new Error("INSUFFICIENT_CREDITS");
+        (err as Error & { status: number }).status = 402;
+        throw err;
+      }
 
       const [copyPre] = await tx
         .select()
@@ -842,6 +849,18 @@ router.post("/listings/:id/buy", authMiddleware, requireAuth, async (req, res) =
             : {}),
         },
       });
+      await tx
+        .update(wallets)
+        .set({ balance: wallet.balance - listing.price, updatedAt: now })
+        .where(eq(wallets.id, wallet.id));
+      await tx.insert(walletTransactions).values({
+        walletId: wallet.id,
+        type: "debit",
+        amount: listing.price,
+        description: acquireForHubId
+          ? `Purchased peer stock: ${listing.bookTitle}`
+          : `Purchased peer book: ${listing.bookTitle}`,
+      });
       return lUpd;
     });
     await notifyUser({
@@ -882,6 +901,14 @@ router.post("/listings/:id/buy", authMiddleware, requireAuth, async (req, res) =
     }
     if (err.message === "HUB_INACTIVE") {
       res.status(403).json({ error: "This hub is inactive." });
+      return;
+    }
+    if (err.message === "INSUFFICIENT_CREDITS") {
+      res.status(402).json({ error: "Insufficient credits to purchase this listing." });
+      return;
+    }
+    if (err.message === "NO_WALLET") {
+      res.status(404).json({ error: "Wallet not found for this user." });
       return;
     }
     if (err.message === "HUB_FORBIDDEN") {

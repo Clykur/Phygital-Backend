@@ -1,5 +1,8 @@
 const fs = require('fs');
-let code = fs.readFileSync('src/lib/auth-user.ts', 'utf8');
+const path = require('path');
+const repoRoot = path.resolve(__dirname, '..');
+const targetPath = path.join(repoRoot, 'src/lib/auth-user.ts');
+let code = fs.readFileSync(targetPath, 'utf8');
 
 code = code.replace(
   'hubs, memberships, subscriptions, users',
@@ -31,4 +34,4 @@ code = code.replace(
   'sub && sub.currentPeriodEnd.getTime() > 1 ? sub.currentPeriodEnd.toISOString() : null;'
 );
 
-fs.writeFileSync('src/lib/auth-user.ts', code);
+fs.writeFileSync(targetPath, code);
