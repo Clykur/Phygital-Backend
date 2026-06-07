@@ -10,6 +10,8 @@ import {
   hubs,
   memberships,
   users,
+  wallets,
+  walletTransactions,
 } from "@workspace/db/schema";
 import { authMiddleware, requireAuth } from "../middleware/auth";
 import { requireHubStaff } from "../lib/hub-guards";
@@ -113,6 +115,17 @@ function serializeSubmission(row: typeof bountySubmissions.$inferSelect) {
     status: row.status,
     submittedAt: row.submittedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function serializeAcquisition(
+  row: typeof bountyAcquisitions.$inferSelect | null | undefined,
+) {
+  return {
+    inventoryBookId: row?.inventoryCopyId ?? null,
+    inventoryConfirmedAt: row?.acquiredAt.toISOString() ?? null,
+    rewardStatus: row?.rewardStatus ?? "pending",
+    rewardPaidAt: row?.rewardPaidAt?.toISOString() ?? null,
   };
 }
 
@@ -266,6 +279,24 @@ router.patch("/hub/requests/:id", authMiddleware, requireAuth, async (req, res) 
     return;
   }
 
+  if (parsed.data.status !== undefined && parsed.data.status !== existing.status) {
+    const validRequestTransitions: Record<string, readonly string[]> = {
+      open: ["paused", "closed"],
+      paused: ["open", "closed"],
+      pending_student_delivery: ["paused", "closed"],
+      under_review: ["paused", "closed"],
+      approved: ["paused", "closed"],
+      completed: ["closed", "open"],
+      closed: ["open"],
+    };
+    if (!validRequestTransitions[existing.status]?.includes(parsed.data.status)) {
+      res.status(409).json({
+        error: `Cannot move bounty request from ${existing.status} to ${parsed.data.status}`,
+      });
+      return;
+    }
+  }
+
   const patch: Partial<typeof bountyRequests.$inferInsert> = {
     updatedAt: new Date(),
   };
@@ -328,9 +359,14 @@ router.get("/hub/requests/:id", authMiddleware, requireAuth, async (req, res) =>
       submission: bountySubmissions,
       studentName: users.name,
       studentEmail: users.email,
+      acquisition: bountyAcquisitions,
     })
     .from(bountySubmissions)
     .innerJoin(users, eq(bountySubmissions.studentId, users.id))
+    .leftJoin(
+      bountyAcquisitions,
+      eq(bountyAcquisitions.bountySubmissionId, bountySubmissions.id),
+    )
     .where(eq(bountySubmissions.bountyRequestId, id))
     .orderBy(desc(bountySubmissions.submittedAt));
 
@@ -338,6 +374,7 @@ router.get("/hub/requests/:id", authMiddleware, requireAuth, async (req, res) =>
     request: serializeRequest(item.request, item.hubName),
     submissions: submissions.map((s) => ({
       ...serializeSubmission(s.submission),
+      ...serializeAcquisition(s.acquisition),
       studentName: s.studentName,
       studentEmail: s.studentEmail,
     })),
@@ -383,7 +420,7 @@ router.post("/requests/:id/submit", authMiddleware, requireAuth, async (req, res
     await tx
       .update(bountyRequests)
       .set({
-        status: "pending_student_delivery",
+        status: "under_review",
         updatedAt: new Date(),
       })
       .where(eq(bountyRequests.id, id));
@@ -422,16 +459,22 @@ router.get("/my-submissions", authMiddleware, requireAuth, async (req, res) => {
       submission: bountySubmissions,
       request: bountyRequests,
       hubName: hubs.name,
+      acquisition: bountyAcquisitions,
     })
     .from(bountySubmissions)
     .innerJoin(bountyRequests, eq(bountySubmissions.bountyRequestId, bountyRequests.id))
     .innerJoin(hubs, eq(bountyRequests.hubId, hubs.id))
+    .leftJoin(
+      bountyAcquisitions,
+      eq(bountyAcquisitions.bountySubmissionId, bountySubmissions.id),
+    )
     .where(eq(bountySubmissions.studentId, auth.userId))
     .orderBy(desc(bountySubmissions.submittedAt));
 
   res.json({
     submissions: rows.map((r) => ({
       ...serializeSubmission(r.submission),
+      ...serializeAcquisition(r.acquisition),
       bountyTitle: r.request.title,
       bountyAuthor: r.request.author,
       rewardAmount: r.request.rewardAmount,
@@ -477,6 +520,19 @@ router.patch("/hub/submissions/:id", authMiddleware, requireAuth, async (req, re
     return;
   }
 
+  const validTransitions: Record<string, readonly string[]> = {
+    submitted: ["awaiting_drop_off", "rejected"],
+    awaiting_drop_off: ["delivered"],
+    delivered: ["under_review"],
+    under_review: ["approved", "rejected"],
+  };
+  if (!validTransitions[submission.status]?.includes(parsed.data.status)) {
+    res.status(409).json({
+      error: `Cannot move submission from ${submission.status} to ${parsed.data.status}`,
+    });
+    return;
+  }
+
   const [updated] = await db
     .update(bountySubmissions)
     .set({ status: parsed.data.status, updatedAt: new Date() })
@@ -492,6 +548,22 @@ router.patch("/hub/submissions/:id", authMiddleware, requireAuth, async (req, re
       body: `Your submission for "${bounty.title}" was approved. Please visit the hub to deliver the book.`,
     });
   } else if (parsed.data.status === "rejected") {
+    const remaining = await db
+      .select({ n: count() })
+      .from(bountySubmissions)
+      .where(
+        and(
+          eq(bountySubmissions.bountyRequestId, bounty.id),
+          inArray(bountySubmissions.status, [
+            "submitted",
+            "awaiting_drop_off",
+            "delivered",
+            "under_review",
+            "approved",
+          ]),
+        ),
+      );
+    if (Number(remaining[0]?.n ?? 0) === 0) bountyStatus = "open";
     await notifyUser({
       userId: submission.studentId,
       kind: "bounty_submission_rejected",
@@ -554,12 +626,34 @@ router.post("/hub/submissions/:id/confirm-receipt", authMiddleware, requireAuth,
     return;
   }
 
-  if (!["delivered", "under_review", "approved", "awaiting_drop_off"].includes(submission.status)) {
+  if (submission.status === "inventory_confirmed") {
+    const existing = await db.query.bountyAcquisitions.findFirst({
+      where: eq(bountyAcquisitions.bountySubmissionId, submission.id),
+    });
+    res.json({
+      alreadyConfirmed: true,
+      acquisition: existing ?? null,
+      submission: {
+        ...serializeSubmission(submission),
+        ...serializeAcquisition(existing),
+      },
+    });
+    return;
+  }
+
+  if (submission.status !== "delivered") {
     res.status(400).json({ error: "Submission not ready for inventory intake" });
     return;
   }
 
   const result = await db.transaction(async (tx) => {
+    const existing = await tx.query.bountyAcquisitions.findFirst({
+      where: eq(bountyAcquisitions.bountySubmissionId, submission.id),
+    });
+    if (existing) {
+      return { book: null, acquisition: existing, alreadyConfirmed: true };
+    }
+
     const [book] = await tx
       .insert(books)
       .values({
@@ -577,6 +671,7 @@ router.post("/hub/submissions/:id/confirm-receipt", authMiddleware, requireAuth,
       })
       .returning();
 
+    const paidAt = new Date();
     const [acquisition] = await tx
       .insert(bountyAcquisitions)
       .values({
@@ -585,13 +680,40 @@ router.post("/hub/submissions/:id/confirm-receipt", authMiddleware, requireAuth,
         inventoryCopyId: book!.id,
         studentId: submission.studentId,
         rewardAmount: bounty.rewardAmount,
+        rewardStatus: "paid",
+        rewardPaidAt: paidAt,
       })
       .returning();
 
     await tx
       .update(bountySubmissions)
-      .set({ status: "approved", updatedAt: new Date() })
+      .set({ status: "inventory_confirmed", updatedAt: paidAt })
       .where(eq(bountySubmissions.id, id));
+
+    let wallet = await tx.query.wallets.findFirst({
+      where: eq(wallets.userId, submission.studentId),
+    });
+    if (!wallet) {
+      [wallet] = await tx
+        .insert(wallets)
+        .values({ userId: submission.studentId, balance: 0 })
+        .returning();
+    }
+    if (bounty.rewardAmount > 0) {
+      await tx
+        .update(wallets)
+        .set({
+          balance: sql`${wallets.balance} + ${bounty.rewardAmount}`,
+          updatedAt: paidAt,
+        })
+        .where(eq(wallets.id, wallet!.id));
+      await tx.insert(walletTransactions).values({
+        walletId: wallet!.id,
+        type: "credit",
+        amount: bounty.rewardAmount,
+        description: `Bounty reward: ${bounty.title}`,
+      });
+    }
 
     const acquiredCount = await tx
       .select({ n: count() })
@@ -613,8 +735,20 @@ router.post("/hub/submissions/:id/confirm-receipt", authMiddleware, requireAuth,
       title: book!.title,
     });
 
-    return { book, acquisition };
+    return { book, acquisition, alreadyConfirmed: false };
   });
+
+  if (result.alreadyConfirmed || !result.book) {
+    res.json({
+      alreadyConfirmed: true,
+      acquisition: result.acquisition,
+      submission: {
+        ...serializeSubmission({ ...submission, status: "inventory_confirmed" }),
+        ...serializeAcquisition(result.acquisition),
+      },
+    });
+    return;
+  }
 
   await logAudit({
     userId: auth.userId,
@@ -639,6 +773,10 @@ router.post("/hub/submissions/:id/confirm-receipt", authMiddleware, requireAuth,
   res.json({
     book: result.book,
     acquisition: result.acquisition,
+    submission: {
+      ...serializeSubmission({ ...submission, status: "inventory_confirmed" }),
+      ...serializeAcquisition(result.acquisition),
+    },
   });
 });
 

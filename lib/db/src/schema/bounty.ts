@@ -45,7 +45,7 @@ export const bountySubmissions = pgTable("bounty_submissions", {
   edition: text("edition"),
   notes: text("notes"),
   photoUrls: jsonb("photo_urls").$type<string[]>().notNull().default([]),
-  /** submitted | awaiting_drop_off | delivered | under_review | approved | rejected */
+  /** submitted | awaiting_drop_off | delivered | under_review | approved | rejected | inventory_confirmed */
   status: text("status").notNull().default("submitted"),
   submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -56,13 +56,16 @@ export const bountyAcquisitions = pgTable("bounty_acquisitions", {
   bountyRequestId: uuid("bounty_request_id")
     .notNull()
     .references(() => bountyRequests.id, { onDelete: "cascade" }),
-  bountySubmissionId: uuid("bounty_submission_id").references(() => bountySubmissions.id, {
-    onDelete: "set null",
-  }),
+  bountySubmissionId: uuid("bounty_submission_id")
+    .references(() => bountySubmissions.id, { onDelete: "set null" })
+    .unique(),
   inventoryCopyId: uuid("inventory_copy_id")
     .notNull()
     .references(() => books.id, { onDelete: "cascade" }),
   studentId: uuid("student_id").references(() => users.id, { onDelete: "set null" }),
   rewardAmount: integer("reward_amount").notNull().default(0),
+  /** pending | paid */
+  rewardStatus: text("reward_status").notNull().default("pending"),
+  rewardPaidAt: timestamp("reward_paid_at", { withTimezone: true }),
   acquiredAt: timestamp("acquired_at", { withTimezone: true }).notNull().defaultNow(),
 });

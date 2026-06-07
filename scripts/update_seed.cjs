@@ -1,5 +1,8 @@
 const fs = require('fs');
-let code = fs.readFileSync('src/seed.ts', 'utf8');
+const path = require('path');
+const repoRoot = path.resolve(__dirname, '..');
+const targetPath = path.join(repoRoot, 'src/seed.ts');
+let code = fs.readFileSync(targetPath, 'utf8');
 
 if (!code.includes('subscriptionPlans')) {
   code = code.replace(
@@ -27,5 +30,5 @@ if (!code.includes('subscriptionPlans')) {
     'export async function seedIfEmpty(): Promise<void> {\n  try {\n' + insertPlans
   );
   
-  fs.writeFileSync('src/seed.ts', code);
+  fs.writeFileSync(targetPath, code);
 }

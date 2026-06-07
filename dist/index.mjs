@@ -13798,7 +13798,7 @@ var ZodType = class {
     const result = await (isAsync(maybeAsyncResult) ? maybeAsyncResult : Promise.resolve(maybeAsyncResult));
     return handleResult(ctx, result);
   }
-  refine(check, message2) {
+  refine(check2, message2) {
     const getIssueProperties = (val) => {
       if (typeof message2 === "string" || typeof message2 === "undefined") {
         return { message: message2 };
@@ -13809,7 +13809,7 @@ var ZodType = class {
       }
     };
     return this._refinement((val, ctx) => {
-      const result = check(val);
+      const result = check2(val);
       const setError = () => ctx.addIssue({
         code: ZodIssueCode.custom,
         ...getIssueProperties(val)
@@ -13832,9 +13832,9 @@ var ZodType = class {
       }
     });
   }
-  refinement(check, refinementData) {
+  refinement(check2, refinementData) {
     return this._refinement((val, ctx) => {
-      if (!check(val)) {
+      if (!check2(val)) {
         ctx.addIssue(typeof refinementData === "function" ? refinementData(val, ctx) : refinementData);
         return false;
       } else {
@@ -14056,70 +14056,70 @@ var ZodString = class _ZodString extends ZodType {
     }
     const status = new ParseStatus();
     let ctx = void 0;
-    for (const check of this._def.checks) {
-      if (check.kind === "min") {
-        if (input.data.length < check.value) {
+    for (const check2 of this._def.checks) {
+      if (check2.kind === "min") {
+        if (input.data.length < check2.value) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.too_small,
-            minimum: check.value,
+            minimum: check2.value,
             type: "string",
             inclusive: true,
             exact: false,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "max") {
-        if (input.data.length > check.value) {
+      } else if (check2.kind === "max") {
+        if (input.data.length > check2.value) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.too_big,
-            maximum: check.value,
+            maximum: check2.value,
             type: "string",
             inclusive: true,
             exact: false,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "length") {
-        const tooBig = input.data.length > check.value;
-        const tooSmall = input.data.length < check.value;
+      } else if (check2.kind === "length") {
+        const tooBig = input.data.length > check2.value;
+        const tooSmall = input.data.length < check2.value;
         if (tooBig || tooSmall) {
           ctx = this._getOrReturnCtx(input, ctx);
           if (tooBig) {
             addIssueToContext(ctx, {
               code: ZodIssueCode.too_big,
-              maximum: check.value,
+              maximum: check2.value,
               type: "string",
               inclusive: true,
               exact: true,
-              message: check.message
+              message: check2.message
             });
           } else if (tooSmall) {
             addIssueToContext(ctx, {
               code: ZodIssueCode.too_small,
-              minimum: check.value,
+              minimum: check2.value,
               type: "string",
               inclusive: true,
               exact: true,
-              message: check.message
+              message: check2.message
             });
           }
           status.dirty();
         }
-      } else if (check.kind === "email") {
+      } else if (check2.kind === "email") {
         if (!emailRegex.test(input.data)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "email",
             code: ZodIssueCode.invalid_string,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "emoji") {
+      } else if (check2.kind === "emoji") {
         if (!emojiRegex) {
           emojiRegex = new RegExp(_emojiRegex, "u");
         }
@@ -14128,61 +14128,61 @@ var ZodString = class _ZodString extends ZodType {
           addIssueToContext(ctx, {
             validation: "emoji",
             code: ZodIssueCode.invalid_string,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "uuid") {
+      } else if (check2.kind === "uuid") {
         if (!uuidRegex.test(input.data)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "uuid",
             code: ZodIssueCode.invalid_string,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "nanoid") {
+      } else if (check2.kind === "nanoid") {
         if (!nanoidRegex.test(input.data)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "nanoid",
             code: ZodIssueCode.invalid_string,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "cuid") {
+      } else if (check2.kind === "cuid") {
         if (!cuidRegex.test(input.data)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "cuid",
             code: ZodIssueCode.invalid_string,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "cuid2") {
+      } else if (check2.kind === "cuid2") {
         if (!cuid2Regex.test(input.data)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "cuid2",
             code: ZodIssueCode.invalid_string,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "ulid") {
+      } else if (check2.kind === "ulid") {
         if (!ulidRegex.test(input.data)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "ulid",
             code: ZodIssueCode.invalid_string,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "url") {
+      } else if (check2.kind === "url") {
         try {
           new URL(input.data);
         } catch {
@@ -14190,153 +14190,153 @@ var ZodString = class _ZodString extends ZodType {
           addIssueToContext(ctx, {
             validation: "url",
             code: ZodIssueCode.invalid_string,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "regex") {
-        check.regex.lastIndex = 0;
-        const testResult = check.regex.test(input.data);
+      } else if (check2.kind === "regex") {
+        check2.regex.lastIndex = 0;
+        const testResult = check2.regex.test(input.data);
         if (!testResult) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "regex",
             code: ZodIssueCode.invalid_string,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "trim") {
+      } else if (check2.kind === "trim") {
         input.data = input.data.trim();
-      } else if (check.kind === "includes") {
-        if (!input.data.includes(check.value, check.position)) {
+      } else if (check2.kind === "includes") {
+        if (!input.data.includes(check2.value, check2.position)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.invalid_string,
-            validation: { includes: check.value, position: check.position },
-            message: check.message
+            validation: { includes: check2.value, position: check2.position },
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "toLowerCase") {
+      } else if (check2.kind === "toLowerCase") {
         input.data = input.data.toLowerCase();
-      } else if (check.kind === "toUpperCase") {
+      } else if (check2.kind === "toUpperCase") {
         input.data = input.data.toUpperCase();
-      } else if (check.kind === "startsWith") {
-        if (!input.data.startsWith(check.value)) {
+      } else if (check2.kind === "startsWith") {
+        if (!input.data.startsWith(check2.value)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.invalid_string,
-            validation: { startsWith: check.value },
-            message: check.message
+            validation: { startsWith: check2.value },
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "endsWith") {
-        if (!input.data.endsWith(check.value)) {
+      } else if (check2.kind === "endsWith") {
+        if (!input.data.endsWith(check2.value)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.invalid_string,
-            validation: { endsWith: check.value },
-            message: check.message
+            validation: { endsWith: check2.value },
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "datetime") {
-        const regex = datetimeRegex(check);
+      } else if (check2.kind === "datetime") {
+        const regex = datetimeRegex(check2);
         if (!regex.test(input.data)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.invalid_string,
             validation: "datetime",
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "date") {
+      } else if (check2.kind === "date") {
         const regex = dateRegex;
         if (!regex.test(input.data)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.invalid_string,
             validation: "date",
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "time") {
-        const regex = timeRegex(check);
+      } else if (check2.kind === "time") {
+        const regex = timeRegex(check2);
         if (!regex.test(input.data)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.invalid_string,
             validation: "time",
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "duration") {
+      } else if (check2.kind === "duration") {
         if (!durationRegex.test(input.data)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "duration",
             code: ZodIssueCode.invalid_string,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "ip") {
-        if (!isValidIP(input.data, check.version)) {
+      } else if (check2.kind === "ip") {
+        if (!isValidIP(input.data, check2.version)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "ip",
             code: ZodIssueCode.invalid_string,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "jwt") {
-        if (!isValidJWT(input.data, check.alg)) {
+      } else if (check2.kind === "jwt") {
+        if (!isValidJWT(input.data, check2.alg)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "jwt",
             code: ZodIssueCode.invalid_string,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "cidr") {
-        if (!isValidCidr(input.data, check.version)) {
+      } else if (check2.kind === "cidr") {
+        if (!isValidCidr(input.data, check2.version)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "cidr",
             code: ZodIssueCode.invalid_string,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "base64") {
+      } else if (check2.kind === "base64") {
         if (!base64Regex.test(input.data)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "base64",
             code: ZodIssueCode.invalid_string,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "base64url") {
+      } else if (check2.kind === "base64url") {
         if (!base64urlRegex.test(input.data)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "base64url",
             code: ZodIssueCode.invalid_string,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
       } else {
-        util.assertNever(check);
+        util.assertNever(check2);
       }
     }
     return { status: status.value, value: input.data };
@@ -14348,10 +14348,10 @@ var ZodString = class _ZodString extends ZodType {
       ...errorUtil.errToObj(message2)
     });
   }
-  _addCheck(check) {
+  _addCheck(check2) {
     return new _ZodString({
       ...this._def,
-      checks: [...this._def.checks, check]
+      checks: [...this._def.checks, check2]
     });
   }
   email(message2) {
@@ -14616,67 +14616,67 @@ var ZodNumber = class _ZodNumber extends ZodType {
     }
     let ctx = void 0;
     const status = new ParseStatus();
-    for (const check of this._def.checks) {
-      if (check.kind === "int") {
+    for (const check2 of this._def.checks) {
+      if (check2.kind === "int") {
         if (!util.isInteger(input.data)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.invalid_type,
             expected: "integer",
             received: "float",
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "min") {
-        const tooSmall = check.inclusive ? input.data < check.value : input.data <= check.value;
+      } else if (check2.kind === "min") {
+        const tooSmall = check2.inclusive ? input.data < check2.value : input.data <= check2.value;
         if (tooSmall) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.too_small,
-            minimum: check.value,
+            minimum: check2.value,
             type: "number",
-            inclusive: check.inclusive,
+            inclusive: check2.inclusive,
             exact: false,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "max") {
-        const tooBig = check.inclusive ? input.data > check.value : input.data >= check.value;
+      } else if (check2.kind === "max") {
+        const tooBig = check2.inclusive ? input.data > check2.value : input.data >= check2.value;
         if (tooBig) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.too_big,
-            maximum: check.value,
+            maximum: check2.value,
             type: "number",
-            inclusive: check.inclusive,
+            inclusive: check2.inclusive,
             exact: false,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "multipleOf") {
-        if (floatSafeRemainder(input.data, check.value) !== 0) {
+      } else if (check2.kind === "multipleOf") {
+        if (floatSafeRemainder(input.data, check2.value) !== 0) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.not_multiple_of,
-            multipleOf: check.value,
-            message: check.message
+            multipleOf: check2.value,
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "finite") {
+      } else if (check2.kind === "finite") {
         if (!Number.isFinite(input.data)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.not_finite,
-            message: check.message
+            message: check2.message
           });
           status.dirty();
         }
       } else {
-        util.assertNever(check);
+        util.assertNever(check2);
       }
     }
     return { status: status.value, value: input.data };
@@ -14707,10 +14707,10 @@ var ZodNumber = class _ZodNumber extends ZodType {
       ]
     });
   }
-  _addCheck(check) {
+  _addCheck(check2) {
     return new _ZodNumber({
       ...this._def,
-      checks: [...this._def.checks, check]
+      checks: [...this._def.checks, check2]
     });
   }
   int(message2) {
@@ -14845,45 +14845,45 @@ var ZodBigInt = class _ZodBigInt extends ZodType {
     }
     let ctx = void 0;
     const status = new ParseStatus();
-    for (const check of this._def.checks) {
-      if (check.kind === "min") {
-        const tooSmall = check.inclusive ? input.data < check.value : input.data <= check.value;
+    for (const check2 of this._def.checks) {
+      if (check2.kind === "min") {
+        const tooSmall = check2.inclusive ? input.data < check2.value : input.data <= check2.value;
         if (tooSmall) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.too_small,
             type: "bigint",
-            minimum: check.value,
-            inclusive: check.inclusive,
-            message: check.message
+            minimum: check2.value,
+            inclusive: check2.inclusive,
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "max") {
-        const tooBig = check.inclusive ? input.data > check.value : input.data >= check.value;
+      } else if (check2.kind === "max") {
+        const tooBig = check2.inclusive ? input.data > check2.value : input.data >= check2.value;
         if (tooBig) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.too_big,
             type: "bigint",
-            maximum: check.value,
-            inclusive: check.inclusive,
-            message: check.message
+            maximum: check2.value,
+            inclusive: check2.inclusive,
+            message: check2.message
           });
           status.dirty();
         }
-      } else if (check.kind === "multipleOf") {
-        if (input.data % check.value !== BigInt(0)) {
+      } else if (check2.kind === "multipleOf") {
+        if (input.data % check2.value !== BigInt(0)) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.not_multiple_of,
-            multipleOf: check.value,
-            message: check.message
+            multipleOf: check2.value,
+            message: check2.message
           });
           status.dirty();
         }
       } else {
-        util.assertNever(check);
+        util.assertNever(check2);
       }
     }
     return { status: status.value, value: input.data };
@@ -14923,10 +14923,10 @@ var ZodBigInt = class _ZodBigInt extends ZodType {
       ]
     });
   }
-  _addCheck(check) {
+  _addCheck(check2) {
     return new _ZodBigInt({
       ...this._def,
-      checks: [...this._def.checks, check]
+      checks: [...this._def.checks, check2]
     });
   }
   positive(message2) {
@@ -15046,35 +15046,35 @@ var ZodDate = class _ZodDate extends ZodType {
     }
     const status = new ParseStatus();
     let ctx = void 0;
-    for (const check of this._def.checks) {
-      if (check.kind === "min") {
-        if (input.data.getTime() < check.value) {
+    for (const check2 of this._def.checks) {
+      if (check2.kind === "min") {
+        if (input.data.getTime() < check2.value) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.too_small,
-            message: check.message,
+            message: check2.message,
             inclusive: true,
             exact: false,
-            minimum: check.value,
+            minimum: check2.value,
             type: "date"
           });
           status.dirty();
         }
-      } else if (check.kind === "max") {
-        if (input.data.getTime() > check.value) {
+      } else if (check2.kind === "max") {
+        if (input.data.getTime() > check2.value) {
           ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.too_big,
-            message: check.message,
+            message: check2.message,
             inclusive: true,
             exact: false,
-            maximum: check.value,
+            maximum: check2.value,
             type: "date"
           });
           status.dirty();
         }
       } else {
-        util.assertNever(check);
+        util.assertNever(check2);
       }
     }
     return {
@@ -15082,10 +15082,10 @@ var ZodDate = class _ZodDate extends ZodType {
       value: new Date(input.data.getTime())
     };
   }
-  _addCheck(check) {
+  _addCheck(check2) {
     return new _ZodDate({
       ...this._def,
-      checks: [...this._def.checks, check]
+      checks: [...this._def.checks, check2]
     });
   }
   min(minDate, message2) {
@@ -15626,10 +15626,10 @@ var ZodObject = class _ZodObject extends ZodType {
   //   }) as any;
   //   return merged;
   // }
-  catchall(index) {
+  catchall(index2) {
     return new _ZodObject({
       ...this._def,
-      catchall: index
+      catchall: index2
     });
   }
   pick(mask) {
@@ -15947,9 +15947,9 @@ function mergeValues(a, b) {
       return { valid: false };
     }
     const newArray = [];
-    for (let index = 0; index < a.length; index++) {
-      const itemA = a[index];
-      const itemB = b[index];
+    for (let index2 = 0; index2 < a.length; index2++) {
+      const itemA = a[index2];
+      const itemB = b[index2];
       const sharedValue = mergeValues(itemA, itemB);
       if (!sharedValue.valid) {
         return { valid: false };
@@ -16155,10 +16155,10 @@ var ZodMap = class extends ZodType {
     }
     const keyType = this._def.keyType;
     const valueType = this._def.valueType;
-    const pairs = [...ctx.data.entries()].map(([key, value], index) => {
+    const pairs = [...ctx.data.entries()].map(([key, value], index2) => {
       return {
-        key: keyType._parse(new ParseInputLazyPath(ctx, key, ctx.path, [index, "key"])),
-        value: valueType._parse(new ParseInputLazyPath(ctx, value, ctx.path, [index, "value"]))
+        key: keyType._parse(new ParseInputLazyPath(ctx, key, ctx.path, [index2, "key"])),
+        value: valueType._parse(new ParseInputLazyPath(ctx, value, ctx.path, [index2, "value"]))
       };
     });
     if (ctx.common.async) {
@@ -16946,10 +16946,10 @@ function cleanParams(params, data) {
   const p2 = typeof p === "string" ? { message: p } : p;
   return p2;
 }
-function custom(check, _params = {}, fatal) {
-  if (check)
+function custom(check2, _params = {}, fatal) {
+  if (check2)
     return ZodAny.create().superRefine((data, ctx) => {
-      const r = check(data);
+      const r = check2(data);
       if (r instanceof Promise) {
         return r.then((r2) => {
           if (!r2) {
@@ -18599,8 +18599,8 @@ function haveSameKeys(left, right) {
   if (leftKeys.length !== rightKeys.length) {
     return false;
   }
-  for (const [index, key] of leftKeys.entries()) {
-    if (key !== rightKeys[index]) {
+  for (const [index2, key] of leftKeys.entries()) {
+    if (key !== rightKeys[index2]) {
       return false;
     }
   }
@@ -20092,6 +20092,145 @@ var pgTable = (name, columns, extraConfig) => {
   return pgTableWithSchema(name, columns, extraConfig, void 0);
 };
 
+// node_modules/drizzle-orm/pg-core/checks.js
+var CheckBuilder = class {
+  constructor(name, value) {
+    this.name = name;
+    this.value = value;
+  }
+  static [entityKind] = "PgCheckBuilder";
+  brand;
+  /** @internal */
+  build(table) {
+    return new Check(table, this);
+  }
+};
+var Check = class {
+  constructor(table, builder) {
+    this.table = table;
+    this.name = builder.name;
+    this.value = builder.value;
+  }
+  static [entityKind] = "PgCheck";
+  name;
+  value;
+};
+function check(name, value) {
+  return new CheckBuilder(name, value);
+}
+
+// node_modules/drizzle-orm/pg-core/indexes.js
+var IndexBuilderOn = class {
+  constructor(unique, name) {
+    this.unique = unique;
+    this.name = name;
+  }
+  static [entityKind] = "PgIndexBuilderOn";
+  on(...columns) {
+    return new IndexBuilder(
+      columns.map((it) => {
+        if (is(it, SQL)) {
+          return it;
+        }
+        it = it;
+        const clonedIndexedColumn = new IndexedColumn(it.name, !!it.keyAsName, it.columnType, it.indexConfig);
+        it.indexConfig = JSON.parse(JSON.stringify(it.defaultConfig));
+        return clonedIndexedColumn;
+      }),
+      this.unique,
+      false,
+      this.name
+    );
+  }
+  onOnly(...columns) {
+    return new IndexBuilder(
+      columns.map((it) => {
+        if (is(it, SQL)) {
+          return it;
+        }
+        it = it;
+        const clonedIndexedColumn = new IndexedColumn(it.name, !!it.keyAsName, it.columnType, it.indexConfig);
+        it.indexConfig = it.defaultConfig;
+        return clonedIndexedColumn;
+      }),
+      this.unique,
+      true,
+      this.name
+    );
+  }
+  /**
+   * Specify what index method to use. Choices are `btree`, `hash`, `gist`, `spgist`, `gin`, `brin`, or user-installed access methods like `bloom`. The default method is `btree.
+   *
+   * If you have the `pg_vector` extension installed in your database, you can use the `hnsw` and `ivfflat` options, which are predefined types.
+   *
+   * **You can always specify any string you want in the method, in case Drizzle doesn't have it natively in its types**
+   *
+   * @param method The name of the index method to be used
+   * @param columns
+   * @returns
+   */
+  using(method, ...columns) {
+    return new IndexBuilder(
+      columns.map((it) => {
+        if (is(it, SQL)) {
+          return it;
+        }
+        it = it;
+        const clonedIndexedColumn = new IndexedColumn(it.name, !!it.keyAsName, it.columnType, it.indexConfig);
+        it.indexConfig = JSON.parse(JSON.stringify(it.defaultConfig));
+        return clonedIndexedColumn;
+      }),
+      this.unique,
+      true,
+      this.name,
+      method
+    );
+  }
+};
+var IndexBuilder = class {
+  static [entityKind] = "PgIndexBuilder";
+  /** @internal */
+  config;
+  constructor(columns, unique, only, name, method = "btree") {
+    this.config = {
+      name,
+      columns,
+      unique,
+      only,
+      method
+    };
+  }
+  concurrently() {
+    this.config.concurrently = true;
+    return this;
+  }
+  with(obj) {
+    this.config.with = obj;
+    return this;
+  }
+  where(condition) {
+    this.config.where = condition;
+    return this;
+  }
+  /** @internal */
+  build(table) {
+    return new Index(this.config, table);
+  }
+};
+var Index = class {
+  static [entityKind] = "PgIndex";
+  config;
+  constructor(config2, table) {
+    this.config = { ...config2, table };
+  }
+};
+function index(name) {
+  return new IndexBuilderOn(false, name);
+}
+function uniqueIndex(name) {
+  return new IndexBuilderOn(true, name);
+}
+
 // node_modules/drizzle-orm/pg-core/primary-keys.js
 var PrimaryKeyBuilder = class {
   static [entityKind] = "PgPrimaryKeyBuilder";
@@ -20755,8 +20894,8 @@ var PgDialect = class {
       return void 0;
     }
     const joinsArray = [];
-    for (const [index, joinMeta] of joins.entries()) {
-      if (index === 0) {
+    for (const [index2, joinMeta] of joins.entries()) {
+      if (index2 === 0) {
         joinsArray.push(sql` `);
       }
       const table = joinMeta.table;
@@ -20783,7 +20922,7 @@ var PgDialect = class {
           sql`${sql.raw(joinMeta.joinType)} join${lateralSql} ${table}${onSql}`
         );
       }
-      if (index < joins.length - 1) {
+      if (index2 < joins.length - 1) {
         joinsArray.push(sql` `);
       }
     }
@@ -24171,6 +24310,7 @@ __export(schema_exports, {
   notificationDeliveries: () => notificationDeliveries,
   p2pListings: () => p2pListings,
   paymentIntents: () => paymentIntents,
+  recentBookViews: () => recentBookViews,
   subscriptionPlans: () => subscriptionPlans,
   subscriptions: () => subscriptions,
   userSubscriptions: () => userSubscriptions,
@@ -24292,6 +24432,30 @@ var p2pListings = pgTable("p2p_listings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   soldAt: timestamp("sold_at", { withTimezone: true })
 });
+var recentBookViews = pgTable(
+  "recent_book_views",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    bookId: uuid("book_id").references(() => books.id, { onDelete: "cascade" }),
+    listingId: uuid("listing_id").references(() => p2pListings.id, {
+      onDelete: "cascade"
+    }),
+    viewedAt: timestamp("viewed_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    recentBookViewsUserViewedAtIdx: index("recent_book_views_user_viewed_at_idx").on(
+      table.userId,
+      table.viewedAt
+    ),
+    recentBookViewsUserBookUnique: uniqueIndex("recent_book_views_user_book_unique").on(table.userId, table.bookId).where(sql`${table.bookId} IS NOT NULL`),
+    recentBookViewsUserListingUnique: uniqueIndex("recent_book_views_user_listing_unique").on(table.userId, table.listingId).where(sql`${table.listingId} IS NOT NULL`),
+    recentBookViewsOneTargetCheck: check(
+      "recent_book_views_one_target_check",
+      sql`(${table.bookId} IS NOT NULL AND ${table.listingId} IS NULL) OR (${table.bookId} IS NULL AND ${table.listingId} IS NOT NULL)`
+    )
+  })
+);
 var bookRequests = pgTable("book_requests", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
@@ -24470,7 +24634,7 @@ var bountySubmissions = pgTable("bounty_submissions", {
   edition: text("edition"),
   notes: text("notes"),
   photoUrls: jsonb("photo_urls").$type().notNull().default([]),
-  /** submitted | awaiting_drop_off | delivered | under_review | approved | rejected */
+  /** submitted | awaiting_drop_off | delivered | under_review | approved | rejected | inventory_confirmed */
   status: text("status").notNull().default("submitted"),
   submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
@@ -24478,12 +24642,13 @@ var bountySubmissions = pgTable("bounty_submissions", {
 var bountyAcquisitions = pgTable("bounty_acquisitions", {
   id: uuid("id").primaryKey().defaultRandom(),
   bountyRequestId: uuid("bounty_request_id").notNull().references(() => bountyRequests.id, { onDelete: "cascade" }),
-  bountySubmissionId: uuid("bounty_submission_id").references(() => bountySubmissions.id, {
-    onDelete: "set null"
-  }),
+  bountySubmissionId: uuid("bounty_submission_id").references(() => bountySubmissions.id, { onDelete: "set null" }).unique(),
   inventoryCopyId: uuid("inventory_copy_id").notNull().references(() => books.id, { onDelete: "cascade" }),
   studentId: uuid("student_id").references(() => users.id, { onDelete: "set null" }),
   rewardAmount: integer("reward_amount").notNull().default(0),
+  /** pending | paid */
+  rewardStatus: text("reward_status").notNull().default("pending"),
+  rewardPaidAt: timestamp("reward_paid_at", { withTimezone: true }),
   acquiredAt: timestamp("acquired_at", { withTimezone: true }).notNull().defaultNow()
 });
 
@@ -35308,7 +35473,7 @@ function authorize(user, action, resource) {
   if (user.baseRole === "super_admin") return true;
   const freeAllowed = action === ACTIONS.VIEW_CATALOG || action === ACTIONS.TRACK_READING || action === ACTIONS.RAISE_QUERY;
   if (freeAllowed) return true;
-  const premiumAllowed = action === ACTIONS.CHECKOUT_BOOK || action === ACTIONS.PURCHASE_BOOK || action === ACTIONS.CREATE_P2P_LISTING || action === ACTIONS.BUY_P2P || action === ACTIONS.BORROW_P2P;
+  const premiumAllowed = action === ACTIONS.CREATE_P2P_LISTING;
   if (premiumAllowed && !isPremiumOk(user)) return false;
   if (action === ACTIONS.EDIT_P2P_LISTING || action === ACTIONS.DELETE_P2P_LISTING) {
     if (resource.type !== "p2p_listing") return false;
@@ -35979,6 +36144,13 @@ router4.post("/:bookId/purchase", authMiddleware, requireAuth, async (req, res) 
         err.status = 409;
         throw err;
       }
+      const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, auth.userId)).limit(1);
+      if (!wallet) throw new Error("NO_WALLET");
+      if (wallet.balance < book.buyPrice) {
+        const err = new Error("INSUFFICIENT_CREDITS");
+        err.status = 402;
+        throw err;
+      }
       if (acquireForHubId) {
         if (acquireForHubId === book.hubId) {
           const err = new Error("BAD_ACQUIRE");
@@ -36023,6 +36195,13 @@ router4.post("/:bookId/purchase", authMiddleware, requireAuth, async (req, res) 
             transferPending: true
           }
         });
+        await tx.update(wallets).set({ balance: wallet.balance - book.buyPrice, updatedAt: now }).where(eq(wallets.id, wallet.id));
+        await tx.insert(walletTransactions).values({
+          walletId: wallet.id,
+          type: "debit",
+          amount: book.buyPrice,
+          description: `Purchased hub stock: ${book.title}`
+        });
         await notifyUser({
           userId: auth.userId,
           kind: "hub_purchase_confirmation",
@@ -36049,6 +36228,13 @@ router4.post("/:bookId/purchase", authMiddleware, requireAuth, async (req, res) 
           resourceType: "book",
           resourceId: bookId,
           meta: { buyerId: auth.userId, buyPrice: book.buyPrice }
+        });
+        await tx.update(wallets).set({ balance: wallet.balance - book.buyPrice, updatedAt: now }).where(eq(wallets.id, wallet.id));
+        await tx.insert(walletTransactions).values({
+          walletId: wallet.id,
+          type: "debit",
+          amount: book.buyPrice,
+          description: `Purchased book: ${book.title}`
         });
         await notifyUser({
           userId: auth.userId,
@@ -36105,6 +36291,14 @@ router4.post("/:bookId/purchase", authMiddleware, requireAuth, async (req, res) 
     }
     if (err.message === "HUB_INACTIVE") {
       res.status(403).json({ error: "This hub is inactive." });
+      return;
+    }
+    if (err.message === "INSUFFICIENT_CREDITS") {
+      res.status(402).json({ error: "Insufficient credits to purchase this book." });
+      return;
+    }
+    if (err.message === "NO_WALLET") {
+      res.status(404).json({ error: "Wallet not found for this user." });
       return;
     }
     if (err.message === "HUB_FORBIDDEN") {
@@ -37928,6 +38122,13 @@ router7.post("/listings/:id/buy", authMiddleware, requireAuth, async (req, res) 
         err.status = 409;
         throw err;
       }
+      const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, auth.userId)).limit(1);
+      if (!wallet) throw new Error("NO_WALLET");
+      if (wallet.balance < listing.price) {
+        const err = new Error("INSUFFICIENT_CREDITS");
+        err.status = 402;
+        throw err;
+      }
       const [copyPre] = await tx.select().from(books).where(eq(books.listingId, listing.id)).limit(1);
       if (acquireForHubId) {
         requireHubStaff(auth, acquireForHubId);
@@ -37999,6 +38200,13 @@ router7.post("/listings/:id/buy", authMiddleware, requireAuth, async (req, res) 
           } : {}
         }
       });
+      await tx.update(wallets).set({ balance: wallet.balance - listing.price, updatedAt: now }).where(eq(wallets.id, wallet.id));
+      await tx.insert(walletTransactions).values({
+        walletId: wallet.id,
+        type: "debit",
+        amount: listing.price,
+        description: acquireForHubId ? `Purchased peer stock: ${listing.bookTitle}` : `Purchased peer book: ${listing.bookTitle}`
+      });
       return lUpd;
     });
     await notifyUser({
@@ -38035,6 +38243,14 @@ router7.post("/listings/:id/buy", authMiddleware, requireAuth, async (req, res) 
     }
     if (err.message === "HUB_INACTIVE") {
       res.status(403).json({ error: "This hub is inactive." });
+      return;
+    }
+    if (err.message === "INSUFFICIENT_CREDITS") {
+      res.status(402).json({ error: "Insufficient credits to purchase this listing." });
+      return;
+    }
+    if (err.message === "NO_WALLET") {
+      res.status(404).json({ error: "Wallet not found for this user." });
       return;
     }
     if (err.message === "HUB_FORBIDDEN") {
@@ -42001,17 +42217,201 @@ var subscriptions_default = router12;
 // src/routes/student.ts
 import { Router as Router13 } from "express";
 var router13 = Router13();
+var recentViewSchema = external_exports.object({
+  bookId: external_exports.string().uuid().optional(),
+  listingId: external_exports.string().uuid().optional()
+}).refine((v) => !!v.bookId !== !!v.listingId, {
+  message: "Provide exactly one bookId or listingId."
+});
+function pageLimit(raw, fallback = 8, max = 50) {
+  const n = typeof raw === "string" ? Number.parseInt(raw, 10) : fallback;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(1, n));
+}
+function pageOffset(raw) {
+  const n = typeof raw === "string" ? Number.parseInt(raw, 10) : 0;
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, n);
+}
+async function getRecentlyViewed(userId, limit = 8, offset = 0) {
+  const { rows } = await pool.query(
+    `
+      SELECT
+        rv.id,
+        CASE WHEN rv.book_id IS NOT NULL THEN 'hub' ELSE 'p2p' END AS source,
+        rv.book_id AS "bookId",
+        rv.listing_id AS "listingId",
+        COALESCE(b.title, pl.book_title) AS title,
+        b.author,
+        COALESCE(b.cover_image_url, pl.cover_image_url) AS "coverImageUrl",
+        COALESCE(b.buy_price, pl.price, 0) AS "buyPrice",
+        COALESCE(b.borrow_price, pl.borrow_price, 0) AS "borrowPrice",
+        COALESCE(b.hub_id, pl.hub_id, pl.dropoff_hub_id) AS "hubId",
+        h.name AS "hubName",
+        rv.viewed_at AS "lastViewedAt"
+      FROM recent_book_views rv
+      LEFT JOIN books b ON b.id = rv.book_id
+      LEFT JOIN p2p_listings pl ON pl.id = rv.listing_id
+      LEFT JOIN hubs h ON h.id = COALESCE(b.hub_id, pl.hub_id, pl.dropoff_hub_id)
+      WHERE rv.user_id = $1
+      ORDER BY rv.viewed_at DESC
+      LIMIT $2 OFFSET $3
+    `,
+    [userId, limit, offset]
+  );
+  return rows;
+}
 router13.get("/dashboard", requireAuth, async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      "SELECT get_student_dashboard_data($1) AS data",
-      [req.auth.userId]
-    );
-    const data = rows[0]?.data;
-    res.json(data);
+    const userId = req.auth.userId;
+    const [recentBooks, purchases, stats] = await Promise.all([
+      getRecentlyViewed(userId, 6, 0),
+      pool.query(
+        `
+          SELECT * FROM (
+            SELECT
+              b.id::text AS id,
+              b.title,
+              b.sold_at AS "createdAt",
+              b.buy_price AS amount,
+              'hub' AS source
+            FROM books b
+            WHERE b.sold_to_user_id = $1
+            UNION ALL
+            SELECT
+              pl.id::text AS id,
+              pl.book_title AS title,
+              pl.sold_at AS "createdAt",
+              pl.price AS amount,
+              'p2p' AS source
+            FROM p2p_listings pl
+            WHERE pl.buyer_id = $1
+          ) purchases
+          ORDER BY "createdAt" DESC NULLS LAST
+          LIMIT 6
+        `,
+        [userId]
+      ),
+      pool.query(
+        `
+          SELECT
+            (
+              SELECT count(*)::int FROM books b WHERE b.sold_to_user_id = $1
+            ) + (
+              SELECT count(*)::int FROM p2p_listings pl WHERE pl.buyer_id = $1
+            ) AS "totalBought",
+            (
+              SELECT count(*)::int
+              FROM p2p_listings pl
+              WHERE pl.owner_id = $1 AND pl.status IN ('sold', 'completed')
+            ) AS "totalSold",
+            COALESCE((
+              SELECT sum(pl.price)::int
+              FROM p2p_listings pl
+              WHERE pl.owner_id = $1 AND pl.status IN ('sold', 'completed')
+            ), 0) + COALESCE((
+              SELECT sum(ba.reward_amount)::int
+              FROM bounty_acquisitions ba
+              WHERE ba.student_id = $1
+            ), 0) AS "creditsEarned",
+            (
+              SELECT count(*)::int
+              FROM books b
+              WHERE b.borrower_user_id = $1 AND b.status IN ('checked_out', 'overdue')
+            ) + (
+              SELECT count(*)::int
+              FROM p2p_listings pl
+              WHERE pl.borrower_user_id = $1 AND pl.status = 'reserved'
+            ) AS "activeBorrowings",
+            (
+              SELECT count(*)::int
+              FROM books b
+              WHERE b.borrower_user_id = $1
+            ) + (
+              SELECT count(*)::int
+              FROM p2p_listings pl
+              WHERE pl.borrower_user_id = $1
+            ) AS "totalBorrowed",
+            (
+              SELECT count(*)::int
+              FROM recent_book_views rv
+              WHERE rv.user_id = $1
+            ) AS "recentlyViewedCount"
+        `,
+        [userId]
+      )
+    ]);
+    res.json({
+      recentBooks,
+      recentPurchases: purchases.rows.map((p) => ({
+        id: p.id,
+        title: p.title,
+        date: p.createdAt ? new Date(p.createdAt).toLocaleDateString("en-IN", {
+          month: "short",
+          day: "numeric"
+        }) : "\u2014",
+        createdAt: p.createdAt,
+        amount: p.amount,
+        source: p.source
+      })),
+      activeListings: [],
+      stats: stats.rows[0] ?? {
+        totalBought: 0,
+        totalSold: 0,
+        creditsEarned: 0,
+        activeBorrowings: 0,
+        totalBorrowed: 0,
+        recentlyViewedCount: 0
+      }
+    });
   } catch (error) {
     logger.error({ err: error }, "Dashboard error");
     res.status(500).json({ error: "Failed to fetch dashboard data" });
+  }
+});
+router13.get("/recently-viewed", requireAuth, async (req, res) => {
+  try {
+    const limit = pageLimit(req.query["limit"]);
+    const offset = pageOffset(req.query["offset"]);
+    const items = await getRecentlyViewed(req.auth.userId, limit, offset);
+    res.json({ items, limit, offset });
+  } catch (error) {
+    logger.error({ err: error }, "Recently viewed list error");
+    res.status(500).json({ error: "Failed to fetch recently viewed books" });
+  }
+});
+router13.post("/recently-viewed", requireAuth, async (req, res) => {
+  const parsed = recentViewSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid recently viewed payload" });
+    return;
+  }
+  try {
+    if (parsed.data.bookId) {
+      await pool.query(
+        `
+          INSERT INTO recent_book_views (user_id, book_id, viewed_at)
+          VALUES ($1, $2, now())
+          ON CONFLICT (user_id, book_id) WHERE book_id IS NOT NULL
+          DO UPDATE SET viewed_at = EXCLUDED.viewed_at
+        `,
+        [req.auth.userId, parsed.data.bookId]
+      );
+    } else {
+      await pool.query(
+        `
+          INSERT INTO recent_book_views (user_id, listing_id, viewed_at)
+          VALUES ($1, $2, now())
+          ON CONFLICT (user_id, listing_id) WHERE listing_id IS NOT NULL
+          DO UPDATE SET viewed_at = EXCLUDED.viewed_at
+        `,
+        [req.auth.userId, parsed.data.listingId]
+      );
+    }
+    res.status(204).send();
+  } catch (error) {
+    logger.error({ err: error }, "Recently viewed write error");
+    res.status(500).json({ error: "Failed to record recently viewed book" });
   }
 });
 var student_default = router13;
@@ -42100,6 +42500,14 @@ function serializeSubmission(row) {
     status: row.status,
     submittedAt: row.submittedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString()
+  };
+}
+function serializeAcquisition(row) {
+  return {
+    inventoryBookId: row?.inventoryCopyId ?? null,
+    inventoryConfirmedAt: row?.acquiredAt.toISOString() ?? null,
+    rewardStatus: row?.rewardStatus ?? "pending",
+    rewardPaidAt: row?.rewardPaidAt?.toISOString() ?? null
   };
 }
 router14.get("/requests", authMiddleware, requireAuth, async (req, res) => {
@@ -42216,6 +42624,23 @@ router14.patch("/hub/requests/:id", authMiddleware, requireAuth, async (req, res
     res.status(403).json({ error: "Forbidden" });
     return;
   }
+  if (parsed.data.status !== void 0 && parsed.data.status !== existing.status) {
+    const validRequestTransitions = {
+      open: ["paused", "closed"],
+      paused: ["open", "closed"],
+      pending_student_delivery: ["paused", "closed"],
+      under_review: ["paused", "closed"],
+      approved: ["paused", "closed"],
+      completed: ["closed", "open"],
+      closed: ["open"]
+    };
+    if (!validRequestTransitions[existing.status]?.includes(parsed.data.status)) {
+      res.status(409).json({
+        error: `Cannot move bounty request from ${existing.status} to ${parsed.data.status}`
+      });
+      return;
+    }
+  }
   const patch = {
     updatedAt: /* @__PURE__ */ new Date()
   };
@@ -42261,12 +42686,17 @@ router14.get("/hub/requests/:id", authMiddleware, requireAuth, async (req, res) 
   const submissions = await db.select({
     submission: bountySubmissions,
     studentName: users.name,
-    studentEmail: users.email
-  }).from(bountySubmissions).innerJoin(users, eq(bountySubmissions.studentId, users.id)).where(eq(bountySubmissions.bountyRequestId, id)).orderBy(desc(bountySubmissions.submittedAt));
+    studentEmail: users.email,
+    acquisition: bountyAcquisitions
+  }).from(bountySubmissions).innerJoin(users, eq(bountySubmissions.studentId, users.id)).leftJoin(
+    bountyAcquisitions,
+    eq(bountyAcquisitions.bountySubmissionId, bountySubmissions.id)
+  ).where(eq(bountySubmissions.bountyRequestId, id)).orderBy(desc(bountySubmissions.submittedAt));
   res.json({
     request: serializeRequest2(item.request, item.hubName),
     submissions: submissions.map((s) => ({
       ...serializeSubmission(s.submission),
+      ...serializeAcquisition(s.acquisition),
       studentName: s.studentName,
       studentEmail: s.studentEmail
     }))
@@ -42302,7 +42732,7 @@ router14.post("/requests/:id/submit", authMiddleware, requireAuth, async (req, r
       status: "submitted"
     }).returning();
     await tx.update(bountyRequests).set({
-      status: "pending_student_delivery",
+      status: "under_review",
       updatedAt: /* @__PURE__ */ new Date()
     }).where(eq(bountyRequests.id, id));
     return [sub];
@@ -42328,11 +42758,16 @@ router14.get("/my-submissions", authMiddleware, requireAuth, async (req, res) =>
   const rows = await db.select({
     submission: bountySubmissions,
     request: bountyRequests,
-    hubName: hubs.name
-  }).from(bountySubmissions).innerJoin(bountyRequests, eq(bountySubmissions.bountyRequestId, bountyRequests.id)).innerJoin(hubs, eq(bountyRequests.hubId, hubs.id)).where(eq(bountySubmissions.studentId, auth.userId)).orderBy(desc(bountySubmissions.submittedAt));
+    hubName: hubs.name,
+    acquisition: bountyAcquisitions
+  }).from(bountySubmissions).innerJoin(bountyRequests, eq(bountySubmissions.bountyRequestId, bountyRequests.id)).innerJoin(hubs, eq(bountyRequests.hubId, hubs.id)).leftJoin(
+    bountyAcquisitions,
+    eq(bountyAcquisitions.bountySubmissionId, bountySubmissions.id)
+  ).where(eq(bountySubmissions.studentId, auth.userId)).orderBy(desc(bountySubmissions.submittedAt));
   res.json({
     submissions: rows.map((r) => ({
       ...serializeSubmission(r.submission),
+      ...serializeAcquisition(r.acquisition),
       bountyTitle: r.request.title,
       bountyAuthor: r.request.author,
       rewardAmount: r.request.rewardAmount,
@@ -42373,6 +42808,18 @@ router14.patch("/hub/submissions/:id", authMiddleware, requireAuth, async (req, 
     res.status(403).json({ error: "Forbidden" });
     return;
   }
+  const validTransitions = {
+    submitted: ["awaiting_drop_off", "rejected"],
+    awaiting_drop_off: ["delivered"],
+    delivered: ["under_review"],
+    under_review: ["approved", "rejected"]
+  };
+  if (!validTransitions[submission.status]?.includes(parsed.data.status)) {
+    res.status(409).json({
+      error: `Cannot move submission from ${submission.status} to ${parsed.data.status}`
+    });
+    return;
+  }
   const [updated] = await db.update(bountySubmissions).set({ status: parsed.data.status, updatedAt: /* @__PURE__ */ new Date() }).where(eq(bountySubmissions.id, id)).returning();
   let bountyStatus = bounty.status;
   if (parsed.data.status === "approved") {
@@ -42383,6 +42830,19 @@ router14.patch("/hub/submissions/:id", authMiddleware, requireAuth, async (req, 
       body: `Your submission for "${bounty.title}" was approved. Please visit the hub to deliver the book.`
     });
   } else if (parsed.data.status === "rejected") {
+    const remaining = await db.select({ n: count() }).from(bountySubmissions).where(
+      and(
+        eq(bountySubmissions.bountyRequestId, bounty.id),
+        inArray(bountySubmissions.status, [
+          "submitted",
+          "awaiting_drop_off",
+          "delivered",
+          "under_review",
+          "approved"
+        ])
+      )
+    );
+    if (Number(remaining[0]?.n ?? 0) === 0) bountyStatus = "open";
     await notifyUser({
       userId: submission.studentId,
       kind: "bounty_submission_rejected",
@@ -42435,11 +42895,31 @@ router14.post("/hub/submissions/:id/confirm-receipt", authMiddleware, requireAut
     res.status(403).json({ error: "Forbidden" });
     return;
   }
-  if (!["delivered", "under_review", "approved", "awaiting_drop_off"].includes(submission.status)) {
+  if (submission.status === "inventory_confirmed") {
+    const existing = await db.query.bountyAcquisitions.findFirst({
+      where: eq(bountyAcquisitions.bountySubmissionId, submission.id)
+    });
+    res.json({
+      alreadyConfirmed: true,
+      acquisition: existing ?? null,
+      submission: {
+        ...serializeSubmission(submission),
+        ...serializeAcquisition(existing)
+      }
+    });
+    return;
+  }
+  if (submission.status !== "delivered") {
     res.status(400).json({ error: "Submission not ready for inventory intake" });
     return;
   }
   const result = await db.transaction(async (tx) => {
+    const existing = await tx.query.bountyAcquisitions.findFirst({
+      where: eq(bountyAcquisitions.bountySubmissionId, submission.id)
+    });
+    if (existing) {
+      return { book: null, acquisition: existing, alreadyConfirmed: true };
+    }
     const [book] = await tx.insert(books).values({
       refId: await nextBookRefId(),
       title: bounty.title,
@@ -42453,14 +42933,35 @@ router14.post("/hub/submissions/:id/confirm-receipt", authMiddleware, requireAut
       borrowPrice: 0,
       ownerId: submission.studentId
     }).returning();
+    const paidAt = /* @__PURE__ */ new Date();
     const [acquisition] = await tx.insert(bountyAcquisitions).values({
       bountyRequestId: bounty.id,
       bountySubmissionId: submission.id,
       inventoryCopyId: book.id,
       studentId: submission.studentId,
-      rewardAmount: bounty.rewardAmount
+      rewardAmount: bounty.rewardAmount,
+      rewardStatus: "paid",
+      rewardPaidAt: paidAt
     }).returning();
-    await tx.update(bountySubmissions).set({ status: "approved", updatedAt: /* @__PURE__ */ new Date() }).where(eq(bountySubmissions.id, id));
+    await tx.update(bountySubmissions).set({ status: "inventory_confirmed", updatedAt: paidAt }).where(eq(bountySubmissions.id, id));
+    let wallet = await tx.query.wallets.findFirst({
+      where: eq(wallets.userId, submission.studentId)
+    });
+    if (!wallet) {
+      [wallet] = await tx.insert(wallets).values({ userId: submission.studentId, balance: 0 }).returning();
+    }
+    if (bounty.rewardAmount > 0) {
+      await tx.update(wallets).set({
+        balance: sql`${wallets.balance} + ${bounty.rewardAmount}`,
+        updatedAt: paidAt
+      }).where(eq(wallets.id, wallet.id));
+      await tx.insert(walletTransactions).values({
+        walletId: wallet.id,
+        type: "credit",
+        amount: bounty.rewardAmount,
+        description: `Bounty reward: ${bounty.title}`
+      });
+    }
     const acquiredCount = await tx.select({ n: count() }).from(bountyAcquisitions).where(eq(bountyAcquisitions.bountyRequestId, bounty.id));
     const fulfilled = Number(acquiredCount[0]?.n ?? 0) >= bounty.quantity;
     await tx.update(bountyRequests).set({
@@ -42472,8 +42973,19 @@ router14.post("/hub/submissions/:id/confirm-receipt", authMiddleware, requireAut
       hubId: book.hubId,
       title: book.title
     });
-    return { book, acquisition };
+    return { book, acquisition, alreadyConfirmed: false };
   });
+  if (result.alreadyConfirmed || !result.book) {
+    res.json({
+      alreadyConfirmed: true,
+      acquisition: result.acquisition,
+      submission: {
+        ...serializeSubmission({ ...submission, status: "inventory_confirmed" }),
+        ...serializeAcquisition(result.acquisition)
+      }
+    });
+    return;
+  }
   await logAudit({
     userId: auth.userId,
     actorId: auth.userId,
@@ -42494,7 +43006,11 @@ router14.post("/hub/submissions/:id/confirm-receipt", authMiddleware, requireAut
   });
   res.json({
     book: result.book,
-    acquisition: result.acquisition
+    acquisition: result.acquisition,
+    submission: {
+      ...serializeSubmission({ ...submission, status: "inventory_confirmed" }),
+      ...serializeAcquisition(result.acquisition)
+    }
   });
 });
 var bounty_default = router14;

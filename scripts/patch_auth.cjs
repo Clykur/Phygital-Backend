@@ -1,6 +1,8 @@
 const fs = require('fs');
-const path = '/Users/karthiknaramala/Desktop/Phygital-Backend/src/routes/auth.ts';
-let content = fs.readFileSync(path, 'utf8');
+const path = require('path');
+const repoRoot = path.resolve(__dirname, '..');
+const targetPath = path.join(repoRoot, 'src/routes/auth.ts');
+let content = fs.readFileSync(targetPath, 'utf8');
 
 const oldGoogleAuth = `router.post("/google", async (req, res) => {
   const { token } = req.body;
@@ -208,4 +210,4 @@ const newGoogleAuth = `router.post("/google", async (req, res) => {
 });`;
 
 content = content.replace(oldGoogleAuth, newGoogleAuth);
-fs.writeFileSync(path, content);
+fs.writeFileSync(targetPath, content);

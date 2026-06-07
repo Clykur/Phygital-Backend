@@ -1,6 +1,9 @@
 import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const hubTsPath = '/Users/karthiknaramala/Desktop/Phygital-Backend/src/routes/hub.ts';
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const hubTsPath = path.join(repoRoot, 'src/routes/hub.ts');
 let code = fs.readFileSync(hubTsPath, 'utf8');
 
 code = code.replace(
