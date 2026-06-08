@@ -5,29 +5,73 @@ import { wallets, walletTransactions } from "@workspace/db/schema";
 import { authMiddleware, requireAuth } from "../middleware/auth";
 import { z } from "zod";
 
+import { logger } from "../lib/logger";
+
 const router = Router();
 router.use(authMiddleware, requireAuth);
 
+
 router.get("/balance", async (req, res) => {
-  let [wallet] = await db.select().from(wallets).where(eq(wallets.userId, req.auth!.userId)).limit(1);
-  if (!wallet) {
-    [wallet] = await db.insert(wallets).values({ userId: req.auth!.userId, balance: 0 }).returning();
+  try {
+    let [wallet] = await db
+      .select()
+      .from(wallets)
+      .where(eq(wallets.userId, req.auth!.userId))
+      .limit(1);
+    if (!wallet) {
+      [wallet] = await db
+        .insert(wallets)
+        .values({ userId: req.auth!.userId, balance: 0 })
+        .returning();
+    }
+    logger.info(
+      { walletUserId: req.auth!.userId, walletId: wallet.id, balance: wallet.balance },
+      "wallet balance loaded",
+    );
+    res.json({ balance: wallet.balance });
+  } catch (err) {
+    logger.error(
+      { err, walletUserId: req.auth!.userId },
+      "wallet balance failed",
+    );
+    throw err;
   }
-  res.json({ balance: wallet.balance });
 });
 
 router.get("/transactions", async (req, res) => {
-  let [wallet] = await db.select().from(wallets).where(eq(wallets.userId, req.auth!.userId)).limit(1);
-  if (!wallet) {
-    [wallet] = await db.insert(wallets).values({ userId: req.auth!.userId, balance: 0 }).returning();
+  try {
+    let [wallet] = await db
+      .select()
+      .from(wallets)
+      .where(eq(wallets.userId, req.auth!.userId))
+      .limit(1);
+    if (!wallet) {
+      [wallet] = await db
+        .insert(wallets)
+        .values({ userId: req.auth!.userId, balance: 0 })
+        .returning();
+    }
+
+    const transactions = await db
+      .select()
+      .from(walletTransactions)
+      .where(eq(walletTransactions.walletId, wallet.id))
+      .orderBy(desc(walletTransactions.createdAt));
+
+    logger.info(
+      { walletUserId: req.auth!.userId, walletId: wallet.id, n: transactions.length },
+      "wallet transactions loaded",
+    );
+    res.json({ transactions });
+  } catch (err) {
+    logger.error(
+      { err, walletUserId: req.auth!.userId },
+      "wallet transactions failed",
+    );
+    throw err;
   }
-  const transactions = await db
-    .select()
-    .from(walletTransactions)
-    .where(eq(walletTransactions.walletId, wallet.id))
-    .orderBy(desc(walletTransactions.createdAt));
-  res.json({ transactions });
 });
+
 
 const debitSchema = z.object({
   amount: z.number().positive(),

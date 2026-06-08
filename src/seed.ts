@@ -6,7 +6,6 @@ import {
   books,
   hubs,
   memberships,
-  notifications,
   p2pListings,
   subscriptions,
   users,
@@ -171,8 +170,46 @@ async function ensureMembership(userId: string, hubId: string, role: string) {
     .where(and(eq(memberships.userId, userId), eq(memberships.hubId, hubId)))
     .limit(1);
   if (m) return;
-  await db.insert(memberships).values({ userId, hubId, role });
+
+  // Avoid foreign-key violations by validating inputs exist.
+  const [u] = await db
+    .select()
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  // If either FK doesn't exist, skip (avoid hard failing seed).
+  if (!u) {
+    logger.error(
+      { userId, hubId, role },
+      "seed ensureMembership: user FK missing; skipping membership insert",
+    );
+    return;
+  }
+
+  const [h] = await db
+    .select()
+    .from(hubs)
+    .where(eq(hubs.id, hubId))
+    .limit(1);
+  if (!h) {
+    logger.error(
+      { userId, hubId, role },
+      "seed ensureMembership: hub FK missing; skipping membership insert",
+    );
+    return;
+  }
+
+  try {
+    await db.insert(memberships).values({ userId, hubId, role });
+  } catch (err) {
+    logger.error(
+      { err, userId, hubId, role },
+      "seed ensureMembership: membership insert failed; continuing",
+    );
+  }
 }
+
+
 
 export async function seedIfEmpty(): Promise<void> {
   try {

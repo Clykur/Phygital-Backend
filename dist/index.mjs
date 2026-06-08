@@ -34929,7 +34929,25 @@ async function authMiddleware(req, _res, next) {
     const payload = await verifyToken(token);
     const user = await loadAuthUser(payload.sub);
     req.auth = user;
-  } catch {
+    if (!user) {
+      logger.warn(
+        {
+          authFlow: true,
+          tokenSub: payload.sub,
+          baseRole: payload.baseRole,
+          reason: "token_valid_but_user_not_loaded_or_account_inactive"
+        },
+        "auth middleware: token verified but user missing/inactive"
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      {
+        authFlow: true,
+        err: err instanceof Error ? err.message : String(err)
+      },
+      "auth middleware: token verification failed"
+    );
     req.auth = null;
   }
   next();
@@ -35011,7 +35029,31 @@ async function ensurePublicReadableIds() {
 
 // src/routes/auth.ts
 import { OAuth2Client } from "google-auth-library";
-var googleClient = new OAuth2Client(process.env.VITE_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID);
+var googleClientId = () => process.env.GOOGLE_CLIENT_ID?.trim() || process.env.VITE_GOOGLE_CLIENT_ID?.trim() || "";
+var googleClient = new OAuth2Client(googleClientId());
+var googleLoginSchema = external_exports.object({
+  token: external_exports.string().min(1),
+  accountType: external_exports.enum(["student", "hub", "user", "super_admin"]).optional(),
+  hubLocation: external_exports.string().optional(),
+  hubName: external_exports.string().optional(),
+  hubKind: external_exports.string().optional()
+});
+function authDebug(message2, meta = {}) {
+  logger.info({ authFlow: true, ...meta }, message2);
+}
+function authFailure(message2, meta = {}) {
+  logger.warn({ authFlow: true, ...meta }, message2);
+}
+function normalizeAccountType(accountType) {
+  if (accountType === "hub") return "hub";
+  if (accountType === "super_admin") return "super_admin";
+  return "student";
+}
+function baseRoleForAccountType(accountType) {
+  if (accountType === "super_admin") return "super_admin";
+  if (accountType === "hub") return "hub";
+  return "user";
+}
 var router2 = Router2();
 router2.post("/register", async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
@@ -35117,53 +35159,133 @@ router2.post("/register", async (req, res) => {
 router2.post("/login", async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
+    authFailure("email login validation failed", {
+      issues: parsed.error.issues.map((issue) => ({ path: issue.path, code: issue.code })),
+      hasEmail: typeof req.body?.email === "string",
+      hasPassword: typeof req.body?.password === "string"
+    });
     res.status(400).json({ error: "Invalid body" });
     return;
   }
-  const [user] = await db.select().from(users).where(eq(users.email, parsed.data.email)).limit(1);
-  if (!user || !await verifyPassword(parsed.data.password, user.passwordHash)) {
-    res.status(401).json({ error: "Invalid credentials" });
-    return;
+  const email = parsed.data.email.toLowerCase();
+  authDebug("email login request received", { email });
+  try {
+    const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    authDebug("email login user lookup completed", {
+      email,
+      found: Boolean(user),
+      userId: user?.id,
+      baseRole: user?.baseRole,
+      accountStatus: user?.accountStatus,
+      hasPasswordHash: Boolean(user?.passwordHash)
+    });
+    const passwordOk = Boolean(
+      user?.passwordHash && await verifyPassword(parsed.data.password, user.passwordHash)
+    );
+    if (!user || !passwordOk) {
+      authFailure("email login invalid credentials", { email, found: Boolean(user) });
+      res.status(401).json({ error: "Invalid credentials" });
+      return;
+    }
+    const authUser = await loadAuthUser(user.id);
+    if (!authUser) {
+      authFailure("email login blocked by account status or missing auth user", {
+        email,
+        userId: user.id,
+        accountStatus: user.accountStatus
+      });
+      res.status(403).json({ error: "Account is currently restricted. Contact support." });
+      return;
+    }
+    const token = await signToken(authUser);
+    authDebug("email login jwt generated", {
+      email,
+      userId: authUser.userId,
+      baseRole: authUser.baseRole,
+      tokenIssued: true
+    });
+    res.json({ token, user: authUser });
+  } catch (error) {
+    authFailure("email login failed unexpectedly", {
+      email,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    throw error;
   }
-  const authUser = await loadAuthUser(user.id);
-  if (!authUser) {
-    res.status(403).json({ error: "Account is currently restricted. Contact support." });
-    return;
-  }
-  const token = await signToken(authUser);
-  res.json({ token, user: authUser });
 });
 router2.post("/google", async (req, res) => {
-  const { token, accountType, hubLocation, hubName, hubKind } = req.body;
-  if (!token) {
-    res.status(400).json({ error: "Missing Google token" });
+  const parsed = googleLoginSchema.safeParse(req.body);
+  if (!parsed.success) {
+    authFailure("google login validation failed", {
+      issues: parsed.error.issues.map((issue) => ({ path: issue.path, code: issue.code })),
+      hasToken: typeof req.body?.token === "string",
+      accountType: req.body?.accountType
+    });
+    res.status(400).json({ error: "Invalid Google login data" });
     return;
   }
+  const { token, accountType, hubLocation, hubName, hubKind } = parsed.data;
+  const audience = googleClientId();
+  if (!audience) {
+    authFailure("google login missing client id configuration");
+    res.status(500).json({ error: "Google authentication is not configured" });
+    return;
+  }
+  authDebug("google login request received", {
+    accountType,
+    hasHubLocation: Boolean(hubLocation),
+    hasHubName: Boolean(hubName),
+    hubKind,
+    tokenLength: token.length
+  });
   try {
     const ticket = await googleClient.verifyIdToken({
       idToken: token,
-      audience: process.env.VITE_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID
+      audience
     });
     const payload = ticket.getPayload();
     if (!payload || !payload.email) {
+      authFailure("google login invalid payload", {
+        hasPayload: Boolean(payload),
+        audience: payload?.aud,
+        issuer: payload?.iss
+      });
       res.status(400).json({ error: "Invalid Google payload" });
       return;
     }
-    const email = payload.email;
+    if (payload.email_verified === false) {
+      authFailure("google login rejected unverified email", { email: payload.email });
+      res.status(401).json({ error: "Google email is not verified" });
+      return;
+    }
+    const email = payload.email.toLowerCase();
     const name = payload.name || email.split("@")[0];
+    authDebug("google token verified", {
+      email,
+      audience: payload.aud,
+      issuer: payload.iss,
+      emailVerified: payload.email_verified
+    });
     let [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    authDebug("google login user lookup completed", {
+      email,
+      found: Boolean(user),
+      userId: user?.id,
+      baseRole: user?.baseRole,
+      accountStatus: user?.accountStatus
+    });
     let userId = user?.id;
     let isNewUser = false;
     if (!user) {
       const passwordHash = await hashPassword(Math.random().toString(36).slice(-8) + "google!");
-      const actualAccountType = accountType || "user";
+      const actualAccountType = normalizeAccountType(accountType);
       userId = await db.transaction(async (tx) => {
         const [row] = await tx.insert(users).values({
           name,
           email,
           passwordHash,
-          baseRole: actualAccountType === "super_admin" ? "super_admin" : actualAccountType === "hub" ? "hub" : "user",
-          publicId: await nextUserPublicId(actualAccountType === "super_admin" ? "super_admin" : actualAccountType === "hub" ? "hub" : "user")
+          baseRole: baseRoleForAccountType(actualAccountType),
+          publicId: await nextUserPublicId(baseRoleForAccountType(actualAccountType))
         }).returning({ id: users.id });
         await tx.insert(subscriptions).values({
           userId: row.id,
@@ -35216,16 +35338,35 @@ router2.post("/google", async (req, res) => {
         return row.id;
       });
       isNewUser = true;
+      authDebug("google login created user", {
+        email,
+        userId,
+        accountType: actualAccountType
+      });
     }
     const authUser = await loadAuthUser(userId);
     if (!authUser) {
+      authFailure("google login blocked by account status or missing auth user", {
+        email,
+        userId,
+        accountStatus: user?.accountStatus
+      });
       res.status(403).json({ error: "Account restricted." });
       return;
     }
     const jwtToken = await signToken(authUser);
+    authDebug("google login jwt generated", {
+      email,
+      userId: authUser.userId,
+      baseRole: authUser.baseRole,
+      isNewUser,
+      tokenIssued: true
+    });
     res.status(isNewUser ? 201 : 200).json({ token: jwtToken, user: authUser });
   } catch (error) {
-    console.error("Google Auth Error:", error);
+    authFailure("google login verification failed", {
+      error: error instanceof Error ? error.message : String(error)
+    });
     res.status(401).json({ error: "Google authentication failed" });
   }
 });
@@ -42029,19 +42170,43 @@ import { Router as Router11 } from "express";
 var router11 = Router11();
 router11.use(authMiddleware, requireAuth);
 router11.get("/balance", async (req, res) => {
-  let [wallet] = await db.select().from(wallets).where(eq(wallets.userId, req.auth.userId)).limit(1);
-  if (!wallet) {
-    [wallet] = await db.insert(wallets).values({ userId: req.auth.userId, balance: 0 }).returning();
+  try {
+    let [wallet] = await db.select().from(wallets).where(eq(wallets.userId, req.auth.userId)).limit(1);
+    if (!wallet) {
+      [wallet] = await db.insert(wallets).values({ userId: req.auth.userId, balance: 0 }).returning();
+    }
+    logger.info(
+      { walletUserId: req.auth.userId, walletId: wallet.id, balance: wallet.balance },
+      "wallet balance loaded"
+    );
+    res.json({ balance: wallet.balance });
+  } catch (err) {
+    logger.error(
+      { err, walletUserId: req.auth.userId },
+      "wallet balance failed"
+    );
+    throw err;
   }
-  res.json({ balance: wallet.balance });
 });
 router11.get("/transactions", async (req, res) => {
-  let [wallet] = await db.select().from(wallets).where(eq(wallets.userId, req.auth.userId)).limit(1);
-  if (!wallet) {
-    [wallet] = await db.insert(wallets).values({ userId: req.auth.userId, balance: 0 }).returning();
+  try {
+    let [wallet] = await db.select().from(wallets).where(eq(wallets.userId, req.auth.userId)).limit(1);
+    if (!wallet) {
+      [wallet] = await db.insert(wallets).values({ userId: req.auth.userId, balance: 0 }).returning();
+    }
+    const transactions = await db.select().from(walletTransactions).where(eq(walletTransactions.walletId, wallet.id)).orderBy(desc(walletTransactions.createdAt));
+    logger.info(
+      { walletUserId: req.auth.userId, walletId: wallet.id, n: transactions.length },
+      "wallet transactions loaded"
+    );
+    res.json({ transactions });
+  } catch (err) {
+    logger.error(
+      { err, walletUserId: req.auth.userId },
+      "wallet transactions failed"
+    );
+    throw err;
   }
-  const transactions = await db.select().from(walletTransactions).where(eq(walletTransactions.walletId, wallet.id)).orderBy(desc(walletTransactions.createdAt));
-  res.json({ transactions });
 });
 var debitSchema = external_exports.object({
   amount: external_exports.number().positive(),
@@ -42714,6 +42879,15 @@ router14.post("/requests/:id/submit", authMiddleware, requireAuth, async (req, r
     res.status(400).json({ error: "Invalid submission" });
     return;
   }
+  logger.info(
+    {
+      studentId: auth.userId,
+      bountyRequestId: id,
+      condition: parsed.data.condition,
+      hasPhotos: Boolean(parsed.data.photoUrls?.length)
+    },
+    "bounty submit received"
+  );
   const bounty = await db.query.bountyRequests.findFirst({
     where: eq(bountyRequests.id, id)
   });
@@ -42721,35 +42895,58 @@ router14.post("/requests/:id/submit", authMiddleware, requireAuth, async (req, r
     res.status(404).json({ error: "Bounty not available" });
     return;
   }
-  const [submission] = await db.transaction(async (tx) => {
-    const [sub] = await tx.insert(bountySubmissions).values({
-      bountyRequestId: id,
-      studentId: auth.userId,
-      condition: parsed.data.condition,
-      edition: parsed.data.edition?.trim() || null,
-      notes: parsed.data.notes?.trim() || null,
-      photoUrls: parsed.data.photoUrls ?? [],
-      status: "submitted"
-    }).returning();
-    await tx.update(bountyRequests).set({
-      status: "under_review",
-      updatedAt: /* @__PURE__ */ new Date()
-    }).where(eq(bountyRequests.id, id));
-    return [sub];
-  });
+  let submission;
+  try {
+    [submission] = await db.transaction(async (tx) => {
+      const [sub] = await tx.insert(bountySubmissions).values({
+        bountyRequestId: id,
+        studentId: auth.userId,
+        condition: parsed.data.condition,
+        edition: parsed.data.edition?.trim() || null,
+        notes: parsed.data.notes?.trim() || null,
+        photoUrls: parsed.data.photoUrls ?? [],
+        status: "submitted"
+      }).returning();
+      await tx.update(bountyRequests).set({
+        status: "under_review",
+        updatedAt: /* @__PURE__ */ new Date()
+      }).where(eq(bountyRequests.id, id));
+      return [sub];
+    });
+  } catch (err) {
+    logger.error(
+      { err, studentId: auth.userId, bountyRequestId: id },
+      "bounty submit transaction failed"
+    );
+    throw err;
+  }
   const hubRow = await db.query.hubs.findFirst({ where: eq(hubs.id, bounty.hubId) });
   const staffRows = await db.select({ userId: memberships.userId }).from(memberships).where(eq(memberships.hubId, bounty.hubId));
-  await notifyUser({
-    userId: auth.userId,
-    kind: "bounty_submission_received",
-    body: `Your submission for "${bounty.title}" at ${hubRow?.name ?? "the hub"} is recorded. Await hub review.`
-  });
-  for (const staff of staffRows) {
+  try {
     await notifyUser({
-      userId: staff.userId,
-      kind: "bounty_new_submission",
-      body: `New bounty submission for "${bounty.title}" from a student.`
+      userId: auth.userId,
+      kind: "bounty_submission_received",
+      body: `Your submission for "${bounty.title}" at ${hubRow?.name ?? "the hub"} is recorded. Await hub review.`
     });
+    for (const staff of staffRows) {
+      await notifyUser({
+        userId: staff.userId,
+        kind: "bounty_new_submission",
+        body: `New bounty submission for "${bounty.title}" from a student.`
+      });
+    }
+  } catch (err) {
+    logger.error(
+      {
+        err,
+        studentId: auth.userId,
+        bountyRequestId: id,
+        hubId: bounty.hubId,
+        staffCount: staffRows.length
+      },
+      "bounty submit notification step failed"
+    );
+    throw err;
   }
   res.status(201).json({ submission: serializeSubmission(submission) });
 });
@@ -43345,11 +43542,24 @@ var errorHandler = (err, req, res, next) => {
     return;
   }
   const chain = errorChainText(err);
-  const code = httpStatusFromError(err, chain);
+  let code = httpStatusFromError(err, chain);
+  const msg = chain.message.toLowerCase();
+  if (code === 500) {
+    if (msg.includes("unauthorized") || msg.includes("invalid token")) code = 401;
+    else if (msg.includes("forbidden")) code = 403;
+    else if (msg.includes("not found") || msg.includes("no rows")) code = 404;
+  }
   const chainMsg = chain.message;
   const message2 = code === 503 ? "Service temporarily unavailable (database unreachable)" : err instanceof Error ? chainMsg || err.message : "Internal Server Error";
   logger.error(
-    { err, method: req.method, path: req.path, status: code },
+    {
+      err,
+      method: req.method,
+      path: req.path,
+      status: code,
+      // Helpful when debugging 500s from nested drivers.
+      chain: chain.message
+    },
     "request failed"
   );
   const body = { error: message2, status: code };
@@ -43813,7 +44023,30 @@ async function ensurePremium(userId) {
 async function ensureMembership(userId, hubId, role) {
   const [m] = await db.select().from(memberships).where(and(eq(memberships.userId, userId), eq(memberships.hubId, hubId))).limit(1);
   if (m) return;
-  await db.insert(memberships).values({ userId, hubId, role });
+  const [u] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!u) {
+    logger.error(
+      { userId, hubId, role },
+      "seed ensureMembership: user FK missing; skipping membership insert"
+    );
+    return;
+  }
+  const [h] = await db.select().from(hubs).where(eq(hubs.id, hubId)).limit(1);
+  if (!h) {
+    logger.error(
+      { userId, hubId, role },
+      "seed ensureMembership: hub FK missing; skipping membership insert"
+    );
+    return;
+  }
+  try {
+    await db.insert(memberships).values({ userId, hubId, role });
+  } catch (err) {
+    logger.error(
+      { err, userId, hubId, role },
+      "seed ensureMembership: membership insert failed; continuing"
+    );
+  }
 }
 async function seedIfEmpty() {
   try {
