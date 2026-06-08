@@ -70,7 +70,16 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next) => {
   }
 
   const chain = errorChainText(err);
-  const code = httpStatusFromError(err, chain);
+  let code = httpStatusFromError(err, chain);
+
+  // Normalize a few common cases to align with desired API semantics.
+  const msg = chain.message.toLowerCase();
+  if (code === 500) {
+    if (msg.includes("unauthorized") || msg.includes("invalid token")) code = 401;
+    else if (msg.includes("forbidden")) code = 403;
+    else if (msg.includes("not found") || msg.includes("no rows")) code = 404;
+  }
+
   const chainMsg = chain.message;
   const message =
     code === 503
@@ -80,7 +89,14 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next) => {
         : "Internal Server Error";
 
   logger.error(
-    { err, method: req.method, path: req.path, status: code },
+    {
+      err,
+      method: req.method,
+      path: req.path,
+      status: code,
+      // Helpful when debugging 500s from nested drivers.
+      chain: chain.message,
+    },
     "request failed",
   );
 
@@ -90,3 +106,4 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next) => {
   }
   res.status(code).type("application/json").json(body);
 };
+

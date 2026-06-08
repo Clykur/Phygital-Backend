@@ -11,7 +11,40 @@ import { authMiddleware, requireAuth } from "../middleware/auth";
 import { nextHubPublicId, nextUserPublicId } from "../lib/public-ids";
 import { OAuth2Client } from "google-auth-library";
 import { loginSchema, registerSchema } from "@workspace/api-zod";
-const googleClient = new OAuth2Client(process.env.VITE_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID);
+import { logger } from "../lib/logger";
+
+const googleClientId = () =>
+  process.env.GOOGLE_CLIENT_ID?.trim() || process.env.VITE_GOOGLE_CLIENT_ID?.trim() || "";
+
+const googleClient = new OAuth2Client(googleClientId());
+
+const googleLoginSchema = z.object({
+  token: z.string().min(1),
+  accountType: z.enum(["student", "hub", "user", "super_admin"]).optional(),
+  hubLocation: z.string().optional(),
+  hubName: z.string().optional(),
+  hubKind: z.string().optional(),
+});
+
+function authDebug(message: string, meta: Record<string, unknown> = {}) {
+  logger.info({ authFlow: true, ...meta }, message);
+}
+
+function authFailure(message: string, meta: Record<string, unknown> = {}) {
+  logger.warn({ authFlow: true, ...meta }, message);
+}
+
+function normalizeAccountType(accountType: string | undefined): "student" | "hub" | "super_admin" {
+  if (accountType === "hub") return "hub";
+  if (accountType === "super_admin") return "super_admin";
+  return "student";
+}
+
+function baseRoleForAccountType(accountType: "student" | "hub" | "super_admin") {
+  if (accountType === "super_admin") return "super_admin";
+  if (accountType === "hub") return "hub";
+  return "user";
+}
 
 const router: IRouter = Router();
 
@@ -136,49 +169,136 @@ router.post("/register", async (req, res) => {
 router.post("/login", async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
+    authFailure("email login validation failed", {
+      issues: parsed.error.issues.map((issue) => ({ path: issue.path, code: issue.code })),
+      hasEmail: typeof req.body?.email === "string",
+      hasPassword: typeof req.body?.password === "string",
+    });
     res.status(400).json({ error: "Invalid body" });
     return;
   }
-  const [user] = await db
-    .select()
-    .from(users)
-    .where(eq(users.email, parsed.data.email))
-    .limit(1);
-  if (!user || !(await verifyPassword(parsed.data.password, user.passwordHash))) {
-    res.status(401).json({ error: "Invalid credentials" });
-    return;
+
+  const email = parsed.data.email.toLowerCase();
+  authDebug("email login request received", { email });
+
+  try {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
+    authDebug("email login user lookup completed", {
+      email,
+      found: Boolean(user),
+      userId: user?.id,
+      baseRole: user?.baseRole,
+      accountStatus: user?.accountStatus,
+      hasPasswordHash: Boolean(user?.passwordHash),
+    });
+
+    const passwordOk = Boolean(
+      user?.passwordHash && (await verifyPassword(parsed.data.password, user.passwordHash)),
+    );
+    if (!user || !passwordOk) {
+      authFailure("email login invalid credentials", { email, found: Boolean(user) });
+      res.status(401).json({ error: "Invalid credentials" });
+      return;
+    }
+
+    const authUser = await loadAuthUser(user.id);
+    if (!authUser) {
+      authFailure("email login blocked by account status or missing auth user", {
+        email,
+        userId: user.id,
+        accountStatus: user.accountStatus,
+      });
+      res.status(403).json({ error: "Account is currently restricted. Contact support." });
+      return;
+    }
+
+    const token = await signToken(authUser);
+    authDebug("email login jwt generated", {
+      email,
+      userId: authUser.userId,
+      baseRole: authUser.baseRole,
+      tokenIssued: true,
+    });
+    res.json({ token, user: authUser });
+  } catch (error) {
+    authFailure("email login failed unexpectedly", {
+      email,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
-  const authUser = await loadAuthUser(user.id);
-  if (!authUser) {
-    res.status(403).json({ error: "Account is currently restricted. Contact support." });
-    return;
-  }
-  const token = await signToken(authUser);
-  res.json({ token, user: authUser });
 });
 
 router.post("/google", async (req, res) => {
-  const { token, accountType, hubLocation, hubName, hubKind } = req.body;
-  if (!token) {
-    res.status(400).json({ error: "Missing Google token" });
+  const parsed = googleLoginSchema.safeParse(req.body);
+  if (!parsed.success) {
+    authFailure("google login validation failed", {
+      issues: parsed.error.issues.map((issue) => ({ path: issue.path, code: issue.code })),
+      hasToken: typeof req.body?.token === "string",
+      accountType: req.body?.accountType,
+    });
+    res.status(400).json({ error: "Invalid Google login data" });
     return;
   }
+
+  const { token, accountType, hubLocation, hubName, hubKind } = parsed.data;
+  const audience = googleClientId();
+  if (!audience) {
+    authFailure("google login missing client id configuration");
+    res.status(500).json({ error: "Google authentication is not configured" });
+    return;
+  }
+
+  authDebug("google login request received", {
+    accountType,
+    hasHubLocation: Boolean(hubLocation),
+    hasHubName: Boolean(hubName),
+    hubKind,
+    tokenLength: token.length,
+  });
 
   try {
     const ticket = await googleClient.verifyIdToken({
       idToken: token,
-      audience: process.env.VITE_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID,
+      audience,
     });
     const payload = ticket.getPayload();
     if (!payload || !payload.email) {
+      authFailure("google login invalid payload", {
+        hasPayload: Boolean(payload),
+        audience: payload?.aud,
+        issuer: payload?.iss,
+      });
       res.status(400).json({ error: "Invalid Google payload" });
       return;
     }
+    if (payload.email_verified === false) {
+      authFailure("google login rejected unverified email", { email: payload.email });
+      res.status(401).json({ error: "Google email is not verified" });
+      return;
+    }
 
-    const email = payload.email;
+    const email = payload.email.toLowerCase();
     const name = payload.name || email.split('@')[0];
+    authDebug("google token verified", {
+      email,
+      audience: payload.aud,
+      issuer: payload.iss,
+      emailVerified: payload.email_verified,
+    });
 
     let [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    authDebug("google login user lookup completed", {
+      email,
+      found: Boolean(user),
+      userId: user?.id,
+      baseRole: user?.baseRole,
+      accountStatus: user?.accountStatus,
+    });
 
     let userId = user?.id;
     let isNewUser = false;
@@ -186,7 +306,7 @@ router.post("/google", async (req, res) => {
     if (!user) {
       // Register new user automatically via Google
       const passwordHash = await hashPassword(Math.random().toString(36).slice(-8) + "google!");
-      const actualAccountType = accountType || "user";
+      const actualAccountType = normalizeAccountType(accountType);
       
       userId = await db.transaction(async (tx) => {
         const [row] = await tx
@@ -195,8 +315,8 @@ router.post("/google", async (req, res) => {
             name,
             email,
             passwordHash,
-            baseRole: actualAccountType === "super_admin" ? "super_admin" : actualAccountType === "hub" ? "hub" : "user",
-            publicId: await nextUserPublicId(actualAccountType === "super_admin" ? "super_admin" : actualAccountType === "hub" ? "hub" : "user"),
+            baseRole: baseRoleForAccountType(actualAccountType),
+            publicId: await nextUserPublicId(baseRoleForAccountType(actualAccountType)),
           })
           .returning({ id: users.id });
           
@@ -263,18 +383,37 @@ router.post("/google", async (req, res) => {
         return row.id;
       });
       isNewUser = true;
+      authDebug("google login created user", {
+        email,
+        userId,
+        accountType: actualAccountType,
+      });
     }
 
     const authUser = await loadAuthUser(userId!);
     if (!authUser) {
+      authFailure("google login blocked by account status or missing auth user", {
+        email,
+        userId,
+        accountStatus: user?.accountStatus,
+      });
       res.status(403).json({ error: "Account restricted." });
       return;
     }
 
     const jwtToken = await signToken(authUser);
+    authDebug("google login jwt generated", {
+      email,
+      userId: authUser.userId,
+      baseRole: authUser.baseRole,
+      isNewUser,
+      tokenIssued: true,
+    });
     res.status(isNewUser ? 201 : 200).json({ token: jwtToken, user: authUser });
   } catch (error) {
-    console.error("Google Auth Error:", error);
+    authFailure("google login verification failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     res.status(401).json({ error: "Google authentication failed" });
   }
 });

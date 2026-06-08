@@ -381,6 +381,8 @@ router.get("/hub/requests/:id", authMiddleware, requireAuth, async (req, res) =>
   });
 });
 
+import { logger } from "../lib/logger";
+
 /** Student: submit "I have this book". */
 router.post("/requests/:id/submit", authMiddleware, requireAuth, async (req, res) => {
   const auth = req.auth!;
@@ -395,6 +397,16 @@ router.post("/requests/:id/submit", authMiddleware, requireAuth, async (req, res
     return;
   }
 
+  logger.info(
+    {
+      studentId: auth.userId,
+      bountyRequestId: id,
+      condition: parsed.data.condition,
+      hasPhotos: Boolean(parsed.data.photoUrls?.length),
+    },
+    "bounty submit received",
+  );
+
   const bounty = await db.query.bountyRequests.findFirst({
     where: eq(bountyRequests.id, id),
   });
@@ -403,30 +415,39 @@ router.post("/requests/:id/submit", authMiddleware, requireAuth, async (req, res
     return;
   }
 
-  const [submission] = await db.transaction(async (tx) => {
-    const [sub] = await tx
-      .insert(bountySubmissions)
-      .values({
-        bountyRequestId: id,
-        studentId: auth.userId,
-        condition: parsed.data.condition,
-        edition: parsed.data.edition?.trim() || null,
-        notes: parsed.data.notes?.trim() || null,
-        photoUrls: parsed.data.photoUrls ?? [],
-        status: "submitted",
-      })
-      .returning();
+  let submission: (typeof bountySubmissions.$inferSelect) | undefined;
+  try {
+    [submission] = await db.transaction(async (tx) => {
+      const [sub] = await tx
+        .insert(bountySubmissions)
+        .values({
+          bountyRequestId: id,
+          studentId: auth.userId,
+          condition: parsed.data.condition,
+          edition: parsed.data.edition?.trim() || null,
+          notes: parsed.data.notes?.trim() || null,
+          photoUrls: parsed.data.photoUrls ?? [],
+          status: "submitted",
+        })
+        .returning();
 
-    await tx
-      .update(bountyRequests)
-      .set({
-        status: "under_review",
-        updatedAt: new Date(),
-      })
-      .where(eq(bountyRequests.id, id));
+      await tx
+        .update(bountyRequests)
+        .set({
+          status: "under_review",
+          updatedAt: new Date(),
+        })
+        .where(eq(bountyRequests.id, id));
 
-    return [sub];
-  });
+      return [sub];
+    });
+  } catch (err) {
+    logger.error(
+      { err, studentId: auth.userId, bountyRequestId: id },
+      "bounty submit transaction failed",
+    );
+    throw err;
+  }
 
   const hubRow = await db.query.hubs.findFirst({ where: eq(hubs.id, bounty.hubId) });
   const staffRows = await db
@@ -434,22 +455,37 @@ router.post("/requests/:id/submit", authMiddleware, requireAuth, async (req, res
     .from(memberships)
     .where(eq(memberships.hubId, bounty.hubId));
 
-  await notifyUser({
-    userId: auth.userId,
-    kind: "bounty_submission_received",
-    body: `Your submission for "${bounty.title}" at ${hubRow?.name ?? "the hub"} is recorded. Await hub review.`,
-  });
-
-  for (const staff of staffRows) {
+  try {
     await notifyUser({
-      userId: staff.userId,
-      kind: "bounty_new_submission",
-      body: `New bounty submission for "${bounty.title}" from a student.`,
+      userId: auth.userId,
+      kind: "bounty_submission_received",
+      body: `Your submission for "${bounty.title}" at ${hubRow?.name ?? "the hub"} is recorded. Await hub review.`,
     });
+
+    for (const staff of staffRows) {
+      await notifyUser({
+        userId: staff.userId,
+        kind: "bounty_new_submission",
+        body: `New bounty submission for "${bounty.title}" from a student.`,
+      });
+    }
+  } catch (err) {
+    logger.error(
+      {
+        err,
+        studentId: auth.userId,
+        bountyRequestId: id,
+        hubId: bounty.hubId,
+        staffCount: staffRows.length,
+      },
+      "bounty submit notification step failed",
+    );
+    throw err;
   }
 
   res.status(201).json({ submission: serializeSubmission(submission!) });
 });
+
 
 /** Student: my bounty submissions. */
 router.get("/my-submissions", authMiddleware, requireAuth, async (req, res) => {
