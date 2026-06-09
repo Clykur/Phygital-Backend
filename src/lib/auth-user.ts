@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { hubs, memberships, userSubscriptions, users } from "@workspace/db/schema";
 import { isHubStaffRole } from "./rbac/hub-membership";
 import type { AuthUser, HubMembership } from "./rbac/types";
+import { subscriptionPlans } from "@workspace/db/schema";
 
 export function computePremiumActive(
   sub: { status: string; currentPeriodEnd: Date } | undefined,
@@ -18,8 +19,14 @@ export async function loadAuthUser(userId: string): Promise<AuthUser | null> {
   if (!user) return null;
   if (user.accountStatus !== "active") return null;
   const [sub] = await db
-    .select()
+    .select({
+      planId: userSubscriptions.planId,
+      status: userSubscriptions.status,
+      currentPeriodEnd: userSubscriptions.currentPeriodEnd,
+      tier: subscriptionPlans.tier,
+    })
     .from(userSubscriptions)
+    .leftJoin(subscriptionPlans, eq(userSubscriptions.planId, subscriptionPlans.id))
     .where(eq(userSubscriptions.userId, userId))
     .limit(1);
   type MembershipRow = InferSelectModel<typeof memberships>;
@@ -45,7 +52,12 @@ export async function loadAuthUser(userId: string): Promise<AuthUser | null> {
   }
   const premiumUntil =
     sub && sub.currentPeriodEnd.getTime() > 1 ? sub.currentPeriodEnd.toISOString() : null;
-  const subscriptionPremium = computePremiumActive(sub);
+  const subscriptionPremium =
+    sub?.tier !== "free" &&
+    computePremiumActive({
+      status: sub.status,
+      currentPeriodEnd: sub.currentPeriodEnd,
+    });
   const premiumActive = user.baseRole === "super_admin" || subscriptionPremium;
   return {
     userId: user.id,

@@ -17073,11 +17073,17 @@ var registerSchema = external_exports.object({
   name: external_exports.string().min(1),
   email: external_exports.string().email(),
   password: external_exports.string().min(8),
+  phone: external_exports.string().regex(/^\d{10}$/).optional(),
+  postalCode: external_exports.string().regex(/^\d{6}$/).optional(),
   accountType: external_exports.enum(["student", "hub", "user", "super_admin"]).optional(),
   isPremium: external_exports.boolean().optional(),
   hubName: external_exports.string().optional(),
   hubLocation: external_exports.string().optional(),
-  hubKind: hubKindSchema.optional()
+  hubKind: hubKindSchema.optional(),
+  address: external_exports.string().optional(),
+  city: external_exports.string().optional(),
+  district: external_exports.string().optional(),
+  state: external_exports.string().optional()
 }).superRefine((data, ctx) => {
   const t = data.accountType ?? "student";
   if (t !== "hub") return;
@@ -24353,6 +24359,12 @@ var hubs = pgTable("hubs", {
   name: text("name").notNull(),
   location: text("location").notNull(),
   kind: text("kind").notNull().default("other"),
+  address: text("address"),
+  city: text("city"),
+  district: text("district"),
+  state: text("state"),
+  postalCode: text("postal_code"),
+  contactPhone: text("contact_phone"),
   isActive: boolean("is_active").notNull().default(true),
   capacity: integer("capacity")
 });
@@ -26081,7 +26093,12 @@ async function loadAuthUser(userId) {
   const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   if (!user) return null;
   if (user.accountStatus !== "active") return null;
-  const [sub] = await db.select().from(userSubscriptions).where(eq(userSubscriptions.userId, userId)).limit(1);
+  const [sub] = await db.select({
+    planId: userSubscriptions.planId,
+    status: userSubscriptions.status,
+    currentPeriodEnd: userSubscriptions.currentPeriodEnd,
+    tier: subscriptionPlans.tier
+  }).from(userSubscriptions).leftJoin(subscriptionPlans, eq(userSubscriptions.planId, subscriptionPlans.id)).where(eq(userSubscriptions.userId, userId)).limit(1);
   const mems = await db.select().from(memberships).where(eq(memberships.userId, userId));
   const staffMems = mems.filter((m) => isHubStaffRole(m.role));
   let hubStaffHubIds = [...new Set(staffMems.map((m) => m.hubId))];
@@ -26100,7 +26117,10 @@ async function loadAuthUser(userId) {
     }
   }
   const premiumUntil = sub && sub.currentPeriodEnd.getTime() > 1 ? sub.currentPeriodEnd.toISOString() : null;
-  const subscriptionPremium = computePremiumActive(sub);
+  const subscriptionPremium = sub?.tier !== "free" && computePremiumActive({
+    status: sub.status,
+    currentPeriodEnd: sub.currentPeriodEnd
+  });
   const premiumActive = user.baseRole === "super_admin" || subscriptionPremium;
   return {
     userId: user.id,
@@ -35328,7 +35348,7 @@ router2.post("/register", async (req, res) => {
     res.status(400).json({ error: "Invalid registration data" });
     return;
   }
-  const { name, email, password } = parsed.data;
+  const { name, email, phone, password } = parsed.data;
   const isPremium = parsed.data.isPremium;
   if (isPremium) {
     res.status(400).json({
@@ -35390,6 +35410,7 @@ router2.post("/register", async (req, res) => {
       const [row] = await tx.insert(users).values({
         name,
         email,
+        phone: phone ?? null,
         passwordHash,
         baseRole: accountType === "super_admin" ? "super_admin" : accountType === "hub" ? "hub" : "user",
         publicId: await nextUserPublicId(
@@ -35410,13 +35431,14 @@ router2.post("/register", async (req, res) => {
       });
       const [freePlan] = await tx.select().from(subscriptionPlans).where(eq(subscriptionPlans.tier, "free")).limit(1);
       if (freePlan) {
+        const freePlanExpiry = /* @__PURE__ */ new Date();
+        freePlanExpiry.setMonth(freePlanExpiry.getMonth() + 6);
         await tx.insert(userSubscriptions).values({
           userId: row.id,
           planId: freePlan.id,
           status: "active",
           currentPeriodStart: /* @__PURE__ */ new Date(),
-          currentPeriodEnd: new Date((/* @__PURE__ */ new Date()).setFullYear((/* @__PURE__ */ new Date()).getFullYear() + 10))
-          // far future
+          currentPeriodEnd: freePlanExpiry
         });
       }
       if (accountType === "hub" || accountType === "super_admin" && parsed.data.hubName) {
@@ -35427,6 +35449,12 @@ router2.post("/register", async (req, res) => {
           name: hubName,
           location: hubLocation,
           kind: hubKind,
+          address: parsed.data.address,
+          city: parsed.data.city,
+          district: parsed.data.district,
+          state: parsed.data.state,
+          postalCode: parsed.data.postalCode,
+          contactPhone: parsed.data.phone,
           publicId: await nextHubPublicId()
         }).returning({ id: hubs.id });
         await tx.insert(memberships).values({
@@ -35564,6 +35592,21 @@ router2.post("/google", async (req, res) => {
 router2.get("/me", authMiddleware, requireAuth, async (req, res) => {
   const fresh = await loadAuthUser(req.auth.userId);
   res.json({ user: fresh });
+});
+router2.get("/hub-profile", authMiddleware, requireAuth, async (req, res) => {
+  const membership = req.auth?.hubMemberships?.[0];
+  if (!membership) {
+    return res.status(404).json({
+      error: "No hub membership found"
+    });
+  }
+  const [hub] = await db.select().from(hubs).where(eq(hubs.id, membership.hubId)).limit(1);
+  if (!hub) {
+    return res.status(404).json({
+      error: "Hub not found"
+    });
+  }
+  res.json({ hub });
 });
 router2.get("/profile-image", requireAuth, async (req, res) => {
   const [row] = await db.select({ path: users.avatarStoragePath }).from(users).where(eq(users.id, req.auth.userId)).limit(1);

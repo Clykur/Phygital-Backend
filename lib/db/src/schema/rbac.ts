@@ -44,15 +44,24 @@ export const subscriptions = pgTable("subscriptions", {
 /** college | public | government | private | other — any org can run a lending hub. */
 export const hubs = pgTable("hubs", {
   id: uuid("id").primaryKey().defaultRandom(),
+
   /** Public readable hub ID (e.g. HUB3F8L2M7P). */
   publicId: text("public_id").unique(),
+
   name: text("name").notNull(),
   location: text("location").notNull(),
   kind: text("kind").notNull().default("other"),
+
+  address: text("address"),
+  city: text("city"),
+  district: text("district"),
+  state: text("state"),
+  postalCode: text("postal_code"),
+  contactPhone: text("contact_phone"),
+
   isActive: boolean("is_active").notNull().default(true),
   capacity: integer("capacity"),
 });
-
 export const memberships = pgTable("memberships", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: uuid("user_id")

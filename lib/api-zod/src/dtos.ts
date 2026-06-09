@@ -7,11 +7,23 @@ export const registerSchema = z
     name: z.string().min(1),
     email: z.string().email(),
     password: z.string().min(8),
+    phone: z
+      .string()
+      .regex(/^\d{10}$/)
+      .optional(),
+    postalCode: z
+      .string()
+      .regex(/^\d{6}$/)
+      .optional(),
     accountType: z.enum(["student", "hub", "user", "super_admin"]).optional(),
     isPremium: z.boolean().optional(),
     hubName: z.string().optional(),
     hubLocation: z.string().optional(),
     hubKind: hubKindSchema.optional(),
+    address: z.string().optional(),
+    city: z.string().optional(),
+    district: z.string().optional(),
+    state: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     const t = data.accountType ?? "student";

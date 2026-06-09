@@ -213,7 +213,7 @@ router.post("/register", async (req, res) => {
     res.status(400).json({ error: "Invalid registration data" });
     return;
   }
-  const { name, email, password } = parsed.data;
+  const { name, email, phone, password } = parsed.data;
   const isPremium = parsed.data.isPremium;
   if (isPremium) {
     res.status(400).json({
@@ -281,6 +281,7 @@ router.post("/register", async (req, res) => {
         .values({
           name,
           email,
+          phone: phone ?? null,
           passwordHash,
           baseRole:
             accountType === "super_admin" ? "super_admin" : accountType === "hub" ? "hub" : "user",
@@ -312,12 +313,15 @@ router.post("/register", async (req, res) => {
         .where(eq(subscriptionPlans.tier, "free"))
         .limit(1);
       if (freePlan) {
+        const freePlanExpiry = new Date();
+        freePlanExpiry.setMonth(freePlanExpiry.getMonth() + 6);
+
         await tx.insert(userSubscriptions).values({
           userId: row.id,
           planId: freePlan.id,
           status: "active",
           currentPeriodStart: new Date(),
-          currentPeriodEnd: new Date(new Date().setFullYear(new Date().getFullYear() + 10)), // far future
+          currentPeriodEnd: freePlanExpiry,
         });
       }
 
@@ -331,6 +335,12 @@ router.post("/register", async (req, res) => {
             name: hubName,
             location: hubLocation,
             kind: hubKind,
+            address: parsed.data.address,
+            city: parsed.data.city,
+            district: parsed.data.district,
+            state: parsed.data.state,
+            postalCode: parsed.data.postalCode,
+            contactPhone: parsed.data.phone,
             publicId: await nextHubPublicId(),
           })
           .returning({ id: hubs.id });
@@ -484,6 +494,25 @@ router.get("/me", authMiddleware, requireAuth, async (req, res) => {
   res.json({ user: fresh });
 });
 
+router.get("/hub-profile", authMiddleware, requireAuth, async (req, res) => {
+  const membership = req.auth?.hubMemberships?.[0];
+
+  if (!membership) {
+    return res.status(404).json({
+      error: "No hub membership found",
+    });
+  }
+
+  const [hub] = await db.select().from(hubs).where(eq(hubs.id, membership.hubId)).limit(1);
+
+  if (!hub) {
+    return res.status(404).json({
+      error: "Hub not found",
+    });
+  }
+
+  res.json({ hub });
+});
 /** Private profile photo; send `Authorization: Bearer`. */
 router.get("/profile-image", requireAuth, async (req, res) => {
   const [row] = await db
