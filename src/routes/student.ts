@@ -139,25 +139,27 @@ router.get("/dashboard", requireAuth, async (req, res) => {
 
     res.json({
       recentBooks,
-      recentPurchases: purchases.rows.map((p: {
-        id: string;
-        title: string;
-        createdAt: string | Date | null;
-        amount: number;
-        source: string;
-      }) => ({
-        id: p.id,
-        title: p.title,
-        date: p.createdAt
-          ? new Date(p.createdAt).toLocaleDateString("en-IN", {
-              month: "short",
-              day: "numeric",
-            })
-          : "—",
-        createdAt: p.createdAt,
-        amount: p.amount,
-        source: p.source,
-      })),
+      recentPurchases: purchases.rows.map(
+        (p: {
+          id: string;
+          title: string;
+          createdAt: string | Date | null;
+          amount: number;
+          source: string;
+        }) => ({
+          id: p.id,
+          title: p.title,
+          date: p.createdAt
+            ? new Date(p.createdAt).toLocaleDateString("en-IN", {
+                month: "short",
+                day: "numeric",
+              })
+            : "—",
+          createdAt: p.createdAt,
+          amount: p.amount,
+          source: p.source,
+        }),
+      ),
       activeListings: [],
       stats: stats.rows[0] ?? {
         totalBought: 0,

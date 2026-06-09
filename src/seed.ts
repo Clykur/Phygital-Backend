@@ -9,7 +9,8 @@ import {
   p2pListings,
   subscriptions,
   users,
- subscriptionPlans } from "@workspace/db/schema";
+  subscriptionPlans,
+} from "@workspace/db/schema";
 import { ACTIONS } from "./lib/rbac/actions";
 import { hashPassword } from "./lib/password";
 import { logger } from "./lib/logger";
@@ -119,10 +120,7 @@ async function ensureUser(email: string, name: string, baseRole = "user") {
   const [existing] = await db.select().from(users).where(eq(users.email, email)).limit(1);
   if (existing) return existing;
   const passwordHash = await hashPassword(DEMO_PASSWORD);
-  const [u] = await db
-    .insert(users)
-    .values({ email, name, passwordHash, baseRole })
-    .returning();
+  const [u] = await db.insert(users).values({ email, name, passwordHash, baseRole }).returning();
   return u!;
 }
 
@@ -142,10 +140,7 @@ async function ensureUserWithPassword(
       .returning();
     return updated ?? existing;
   }
-  const [u] = await db
-    .insert(users)
-    .values({ email, name, passwordHash, baseRole })
-    .returning();
+  const [u] = await db.insert(users).values({ email, name, passwordHash, baseRole }).returning();
   return u!;
 }
 
@@ -172,11 +167,7 @@ async function ensureMembership(userId: string, hubId: string, role: string) {
   if (m) return;
 
   // Avoid foreign-key violations by validating inputs exist.
-  const [u] = await db
-    .select()
-    .from(users)
-    .where(eq(users.id, userId))
-    .limit(1);
+  const [u] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   // If either FK doesn't exist, skip (avoid hard failing seed).
   if (!u) {
     logger.error(
@@ -186,11 +177,7 @@ async function ensureMembership(userId: string, hubId: string, role: string) {
     return;
   }
 
-  const [h] = await db
-    .select()
-    .from(hubs)
-    .where(eq(hubs.id, hubId))
-    .limit(1);
+  const [h] = await db.select().from(hubs).where(eq(hubs.id, hubId)).limit(1);
   if (!h) {
     logger.error(
       { userId, hubId, role },
@@ -209,26 +196,54 @@ async function ensureMembership(userId: string, hubId: string, role: string) {
   }
 }
 
-
-
 export async function seedIfEmpty(): Promise<void> {
   try {
-
     const [{ c: planCount }] = await db.select({ c: count() }).from(subscriptionPlans);
     if (Number(planCount) === 0) {
       await db.insert(subscriptionPlans).values([
-        { tier: 'free', name: 'Student Free', target: 'student', price: 0, creditReward: 0, isActive: 1 },
-        { tier: 'pro', name: 'Student Premium', target: 'student', price: 299, creditReward: 50, isActive: 1 },
-        { tier: 'hub_basic', name: 'Hub Basic', target: 'hub', price: 0, creditReward: 0, isActive: 1 },
-        { tier: 'hub_pro', name: 'Hub Pro', target: 'hub', price: 999, creditReward: 0, isActive: 1 }
+        {
+          tier: "free",
+          name: "Student Free",
+          target: "student",
+          price: 0,
+          creditReward: 0,
+          isActive: 1,
+        },
+        {
+          tier: "pro",
+          name: "Student Premium",
+          target: "student",
+          price: 299,
+          creditReward: 50,
+          isActive: 1,
+        },
+        {
+          tier: "hub_basic",
+          name: "Hub Basic",
+          target: "hub",
+          price: 0,
+          creditReward: 0,
+          isActive: 1,
+        },
+        {
+          tier: "hub_pro",
+          name: "Hub Pro",
+          target: "hub",
+          price: 999,
+          creditReward: 0,
+          isActive: 1,
+        },
       ]);
     }
-      const [{ c: hubCount }] = await db.select({ c: count() }).from(hubs);
+    const [{ c: hubCount }] = await db.select({ c: count() }).from(hubs);
     let hubList = await db.select().from(hubs).orderBy(asc(hubs.name));
     const createdFreshHubs = Number(hubCount) === 0;
 
     if (createdFreshHubs) {
-      hubList = await db.insert(hubs).values([...HUB_SEEDS]).returning();
+      hubList = await db
+        .insert(hubs)
+        .values([...HUB_SEEDS])
+        .returning();
     }
 
     if (hubList.length === 0) return;

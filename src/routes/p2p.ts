@@ -6,21 +6,22 @@ import { Router, type IRouter } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@workspace/db";
-import { books, p2pListings, users, wallets, subscriptions, walletTransactions } from "@workspace/db/schema";
+import {
+  books,
+  p2pListings,
+  users,
+  wallets,
+  subscriptions,
+  walletTransactions,
+} from "@workspace/db/schema";
 import { ACTIONS } from "../lib/rbac/actions";
 import { authorize } from "../lib/rbac/authorize";
-import {
-  canEditP2pListing,
-  isValidP2pTransition,
-} from "../lib/state-machines";
+import { canEditP2pListing, isValidP2pTransition } from "../lib/state-machines";
 import { logAudit } from "../lib/audit";
 import { pathParam } from "../lib/path-param";
 import { authMiddleware, requireAuth } from "../middleware/auth";
 import { checkoutDueAt } from "../lib/books-lifecycle";
-import {
-  coverImageUrlCreateSchema,
-  coverImageUrlPatchSchema,
-} from "../lib/cover-image-url";
+import { coverImageUrlCreateSchema, coverImageUrlPatchSchema } from "../lib/cover-image-url";
 import { isPremiumOk, requireActiveHub, requireHubStaff } from "../lib/hub-guards";
 import { tryAssignCopyToWaitingRequests } from "../lib/hub-inventory";
 import { getInventoryStatsForTitles } from "../lib/inventory-stats";
@@ -176,8 +177,7 @@ router.patch("/listings/:id", authMiddleware, requireAuth, async (req, res) => {
       ...(parsed.data.borrowPrice !== undefined ? { borrowPrice: parsed.data.borrowPrice } : {}),
       ...(parsed.data.coverImageUrl !== undefined
         ? {
-            coverImageUrl:
-              parsed.data.coverImageUrl === "" ? null : parsed.data.coverImageUrl,
+            coverImageUrl: parsed.data.coverImageUrl === "" ? null : parsed.data.coverImageUrl,
           }
         : {}),
       updatedAt: new Date(),
@@ -497,10 +497,18 @@ router.post("/listings/:id/borrow", authMiddleware, requireAuth, async (req, res
         throw err;
       }
 
-      const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, auth.userId)).limit(1);
+      const [wallet] = await tx
+        .select()
+        .from(wallets)
+        .where(eq(wallets.userId, auth.userId))
+        .limit(1);
       if (!wallet) throw new Error("NO_WALLET");
 
-      const [sub] = await tx.select().from(subscriptions).where(eq(subscriptions.userId, auth.userId)).limit(1);
+      const [sub] = await tx
+        .select()
+        .from(subscriptions)
+        .where(eq(subscriptions.userId, auth.userId))
+        .limit(1);
       const isPremium = sub?.status === "active" && sub.premiumUntil > new Date();
 
       if (!isPremium) {
@@ -509,7 +517,10 @@ router.post("/listings/:id/borrow", authMiddleware, requireAuth, async (req, res
           (err as Error & { status: number }).status = 402;
           throw err;
         }
-        await tx.update(wallets).set({ balance: wallet.balance - listing.borrowPrice, updatedAt: new Date() }).where(eq(wallets.id, wallet.id));
+        await tx
+          .update(wallets)
+          .set({ balance: wallet.balance - listing.borrowPrice, updatedAt: new Date() })
+          .where(eq(wallets.id, wallet.id));
         await tx.insert(walletTransactions).values({
           walletId: wallet.id,
           type: "debit",
@@ -600,7 +611,9 @@ router.post("/listings/:id/borrow", authMiddleware, requireAuth, async (req, res
       return;
     }
     if (err.message === "RACE") {
-      res.status(409).json({ error: "Another student just rented this copy. Refresh and try again." });
+      res
+        .status(409)
+        .json({ error: "Another student just rented this copy. Refresh and try again." });
       return;
     }
     if (err.message === "HUB_INACTIVE") {
@@ -639,11 +652,7 @@ router.post("/listings/:id/return-borrow", authMiddleware, requireAuth, async (r
     res.status(403).json({ error: "Only the borrower can return this peer copy here." });
     return;
   }
-  const [copy] = await db
-    .select()
-    .from(books)
-    .where(eq(books.listingId, listing.id))
-    .limit(1);
+  const [copy] = await db.select().from(books).where(eq(books.listingId, listing.id)).limit(1);
   await db.transaction(async (tx) => {
     if (copy) {
       await tx
@@ -752,7 +761,11 @@ router.post("/listings/:id/buy", authMiddleware, requireAuth, async (req, res) =
         (err as Error & { status: number }).status = 409;
         throw err;
       }
-      const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, auth.userId)).limit(1);
+      const [wallet] = await tx
+        .select()
+        .from(wallets)
+        .where(eq(wallets.userId, auth.userId))
+        .limit(1);
       if (!wallet) throw new Error("NO_WALLET");
       if (wallet.balance < listing.price) {
         const err = new Error("INSUFFICIENT_CREDITS");
@@ -896,7 +909,9 @@ router.post("/listings/:id/buy", authMiddleware, requireAuth, async (req, res) =
       return;
     }
     if (err.message === "RACE") {
-      res.status(409).json({ error: "Another buyer just purchased this listing. Refresh and try again." });
+      res
+        .status(409)
+        .json({ error: "Another buyer just purchased this listing. Refresh and try again." });
       return;
     }
     if (err.message === "HUB_INACTIVE") {

@@ -1,18 +1,18 @@
-const fs = require('fs');
-const path = require('path');
-const repoRoot = path.resolve(__dirname, '..');
-const targetPath = path.join(repoRoot, 'src/seed.ts');
-let code = fs.readFileSync(targetPath, 'utf8');
+const fs = require("fs");
+const path = require("path");
+const repoRoot = path.resolve(__dirname, "..");
+const targetPath = path.join(repoRoot, "src/seed.ts");
+let code = fs.readFileSync(targetPath, "utf8");
 
-if (!code.includes('subscriptionPlans')) {
-  code = code.replace(
-    /import {.*?from "@workspace\/db\/schema";/s,
-    match => {
-      if (match.includes('subscriptionPlans')) return match;
-      return match.replace('} from "@workspace/db/schema";', ', subscriptionPlans } from "@workspace/db/schema";');
-    }
-  );
-  
+if (!code.includes("subscriptionPlans")) {
+  code = code.replace(/import {.*?from "@workspace\/db\/schema";/s, (match) => {
+    if (match.includes("subscriptionPlans")) return match;
+    return match.replace(
+      '} from "@workspace/db/schema";',
+      ', subscriptionPlans } from "@workspace/db/schema";',
+    );
+  });
+
   const insertPlans = `
     const [{ c: planCount }] = await db.select({ c: count() }).from(subscriptionPlans);
     if (Number(planCount) === 0) {
@@ -24,11 +24,11 @@ if (!code.includes('subscriptionPlans')) {
       ]);
     }
   `;
-  
+
   code = code.replace(
-    'export async function seedIfEmpty(): Promise<void> {\n  try {\n',
-    'export async function seedIfEmpty(): Promise<void> {\n  try {\n' + insertPlans
+    "export async function seedIfEmpty(): Promise<void> {\n  try {\n",
+    "export async function seedIfEmpty(): Promise<void> {\n  try {\n" + insertPlans,
   );
-  
+
   fs.writeFileSync(targetPath, code);
 }

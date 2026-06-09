@@ -52,7 +52,7 @@ function activitySummary(
 ): string {
   const t = title?.trim() || "Untitled";
   const fromId = meta && typeof meta.fromHubId === "string" ? meta.fromHubId : null;
-  const fromName = fromId ? fromHubNameById.get(fromId) ?? "another hub" : null;
+  const fromName = fromId ? (fromHubNameById.get(fromId) ?? "another hub") : null;
   const shelfAcquire =
     meta && typeof meta.shelfAcquireForHubId === "string" ? meta.shelfAcquireForHubId : null;
   const transferPending = meta && meta.transferPending === true;
@@ -108,7 +108,10 @@ router.get("/timeline", authMiddleware, requireAuth, async (req, res) => {
   const bookIds = [
     ...new Set(
       rows
-        .filter((r) => r.resourceType === "book" && r.resourceId && uuidParam.safeParse(r.resourceId).success)
+        .filter(
+          (r) =>
+            r.resourceType === "book" && r.resourceId && uuidParam.safeParse(r.resourceId).success,
+        )
         .map((r) => r.resourceId as string),
     ),
   ];
@@ -117,7 +120,9 @@ router.get("/timeline", authMiddleware, requireAuth, async (req, res) => {
       rows
         .filter(
           (r) =>
-            r.resourceType === "p2p_listing" && r.resourceId && uuidParam.safeParse(r.resourceId).success,
+            r.resourceType === "p2p_listing" &&
+            r.resourceId &&
+            uuidParam.safeParse(r.resourceId).success,
         )
         .map((r) => r.resourceId as string),
     ),
@@ -179,7 +184,7 @@ router.get("/timeline", authMiddleware, requireAuth, async (req, res) => {
       resourceType: r.resourceType,
       resourceId: r.resourceId,
       hubId: r.hubId,
-      hubName: r.hubId ? hubNameById.get(r.hubId) ?? null : null,
+      hubName: r.hubId ? (hubNameById.get(r.hubId) ?? null) : null,
       category: eventCategory(r.action),
       createdAt: r.createdAt.toISOString(),
     };

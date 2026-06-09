@@ -71,13 +71,7 @@ const submitBountySchema = z.object({
 });
 
 const submissionStatusSchema = z.object({
-  status: z.enum([
-    "awaiting_drop_off",
-    "under_review",
-    "approved",
-    "rejected",
-    "delivered",
-  ]),
+  status: z.enum(["awaiting_drop_off", "under_review", "approved", "rejected", "delivered"]),
 });
 
 function serializeRequest(row: typeof bountyRequests.$inferSelect, hubName?: string) {
@@ -118,9 +112,7 @@ function serializeSubmission(row: typeof bountySubmissions.$inferSelect) {
   };
 }
 
-function serializeAcquisition(
-  row: typeof bountyAcquisitions.$inferSelect | null | undefined,
-) {
+function serializeAcquisition(row: typeof bountyAcquisitions.$inferSelect | null | undefined) {
   return {
     inventoryBookId: row?.inventoryCopyId ?? null,
     inventoryConfirmedAt: row?.acquiredAt.toISOString() ?? null,
@@ -142,10 +134,7 @@ router.get("/requests", authMiddleware, requireAuth, async (req, res) => {
     .where(
       and(
         inArray(bountyRequests.status, [...BOUNTY_ACTIVE_STATUSES]),
-        or(
-          sql`${bountyRequests.expiryDate} IS NULL`,
-          gte(bountyRequests.expiryDate, now),
-        ),
+        or(sql`${bountyRequests.expiryDate} IS NULL`, gte(bountyRequests.expiryDate, now)),
       ),
     )
     .orderBy(desc(bountyRequests.createdAt));
@@ -164,9 +153,7 @@ router.get("/hub/requests", authMiddleware, requireAuth, async (req, res) => {
   }
   const hubIdParam = typeof req.query["hubId"] === "string" ? req.query["hubId"] : undefined;
   const effective =
-    hubIdParam && auth.hubStaffHubIds.includes(hubIdParam)
-      ? [hubIdParam]
-      : auth.hubStaffHubIds;
+    hubIdParam && auth.hubStaffHubIds.includes(hubIdParam) ? [hubIdParam] : auth.hubStaffHubIds;
 
   const rows = await db
     .select({
@@ -189,9 +176,7 @@ router.get("/hub/requests", authMiddleware, requireAuth, async (req, res) => {
       .from(bountySubmissions)
       .where(inArray(bountySubmissions.bountyRequestId, requestIds))
       .groupBy(bountySubmissions.bountyRequestId);
-    submissionCounts = Object.fromEntries(
-      counts.map((c) => [c.bountyRequestId, Number(c.n)]),
-    );
+    submissionCounts = Object.fromEntries(counts.map((c) => [c.bountyRequestId, Number(c.n)]));
   }
 
   res.json({
@@ -303,7 +288,8 @@ router.patch("/hub/requests/:id", authMiddleware, requireAuth, async (req, res) 
   if (parsed.data.title !== undefined) patch.title = parsed.data.title.trim();
   if (parsed.data.author !== undefined) patch.author = parsed.data.author?.trim() || null;
   if (parsed.data.edition !== undefined) patch.edition = parsed.data.edition?.trim() || null;
-  if (parsed.data.department !== undefined) patch.department = parsed.data.department?.trim() || null;
+  if (parsed.data.department !== undefined)
+    patch.department = parsed.data.department?.trim() || null;
   if (parsed.data.semester !== undefined) patch.semester = parsed.data.semester?.trim() || null;
   if (parsed.data.subject !== undefined) patch.subject = parsed.data.subject?.trim() || null;
   if (parsed.data.isbn !== undefined) patch.isbn = parsed.data.isbn?.trim() || null;
@@ -363,10 +349,7 @@ router.get("/hub/requests/:id", authMiddleware, requireAuth, async (req, res) =>
     })
     .from(bountySubmissions)
     .innerJoin(users, eq(bountySubmissions.studentId, users.id))
-    .leftJoin(
-      bountyAcquisitions,
-      eq(bountyAcquisitions.bountySubmissionId, bountySubmissions.id),
-    )
+    .leftJoin(bountyAcquisitions, eq(bountyAcquisitions.bountySubmissionId, bountySubmissions.id))
     .where(eq(bountySubmissions.bountyRequestId, id))
     .orderBy(desc(bountySubmissions.submittedAt));
 
@@ -410,12 +393,15 @@ router.post("/requests/:id/submit", authMiddleware, requireAuth, async (req, res
   const bounty = await db.query.bountyRequests.findFirst({
     where: eq(bountyRequests.id, id),
   });
-  if (!bounty || !BOUNTY_ACTIVE_STATUSES.includes(bounty.status as (typeof BOUNTY_ACTIVE_STATUSES)[number])) {
+  if (
+    !bounty ||
+    !BOUNTY_ACTIVE_STATUSES.includes(bounty.status as (typeof BOUNTY_ACTIVE_STATUSES)[number])
+  ) {
     res.status(404).json({ error: "Bounty not available" });
     return;
   }
 
-  let submission: (typeof bountySubmissions.$inferSelect) | undefined;
+  let submission: typeof bountySubmissions.$inferSelect | undefined;
   try {
     [submission] = await db.transaction(async (tx) => {
       const [sub] = await tx
@@ -486,7 +472,6 @@ router.post("/requests/:id/submit", authMiddleware, requireAuth, async (req, res
   res.status(201).json({ submission: serializeSubmission(submission!) });
 });
 
-
 /** Student: my bounty submissions. */
 router.get("/my-submissions", authMiddleware, requireAuth, async (req, res) => {
   const auth = req.auth!;
@@ -500,10 +485,7 @@ router.get("/my-submissions", authMiddleware, requireAuth, async (req, res) => {
     .from(bountySubmissions)
     .innerJoin(bountyRequests, eq(bountySubmissions.bountyRequestId, bountyRequests.id))
     .innerJoin(hubs, eq(bountyRequests.hubId, hubs.id))
-    .leftJoin(
-      bountyAcquisitions,
-      eq(bountyAcquisitions.bountySubmissionId, bountySubmissions.id),
-    )
+    .leftJoin(bountyAcquisitions, eq(bountyAcquisitions.bountySubmissionId, bountySubmissions.id))
     .where(eq(bountySubmissions.studentId, auth.userId))
     .orderBy(desc(bountySubmissions.submittedAt));
 
@@ -632,188 +614,196 @@ router.patch("/hub/submissions/:id", authMiddleware, requireAuth, async (req, re
 });
 
 /** Hub: confirm physical receipt → create inventory copy + acquisition record. */
-router.post("/hub/submissions/:id/confirm-receipt", authMiddleware, requireAuth, async (req, res) => {
-  const auth = req.auth!;
-  const id = pathParam(req.params["id"]);
-  if (!id) {
-    res.status(400).json({ error: "Invalid id" });
-    return;
-  }
-
-  const submission = await db.query.bountySubmissions.findFirst({
-    where: eq(bountySubmissions.id, id),
-  });
-  if (!submission) {
-    res.status(404).json({ error: "Submission not found" });
-    return;
-  }
-
-  const bounty = await db.query.bountyRequests.findFirst({
-    where: eq(bountyRequests.id, submission.bountyRequestId),
-  });
-  if (!bounty) {
-    res.status(404).json({ error: "Bounty not found" });
-    return;
-  }
-  try {
-    requireHubStaff(auth, bounty.hubId);
-  } catch {
-    res.status(403).json({ error: "Forbidden" });
-    return;
-  }
-
-  if (submission.status === "inventory_confirmed") {
-    const existing = await db.query.bountyAcquisitions.findFirst({
-      where: eq(bountyAcquisitions.bountySubmissionId, submission.id),
-    });
-    res.json({
-      alreadyConfirmed: true,
-      acquisition: existing ?? null,
-      submission: {
-        ...serializeSubmission(submission),
-        ...serializeAcquisition(existing),
-      },
-    });
-    return;
-  }
-
-  if (submission.status !== "delivered") {
-    res.status(400).json({ error: "Submission not ready for inventory intake" });
-    return;
-  }
-
-  const result = await db.transaction(async (tx) => {
-    const existing = await tx.query.bountyAcquisitions.findFirst({
-      where: eq(bountyAcquisitions.bountySubmissionId, submission.id),
-    });
-    if (existing) {
-      return { book: null, acquisition: existing, alreadyConfirmed: true };
+router.post(
+  "/hub/submissions/:id/confirm-receipt",
+  authMiddleware,
+  requireAuth,
+  async (req, res) => {
+    const auth = req.auth!;
+    const id = pathParam(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
     }
 
-    const [book] = await tx
-      .insert(books)
-      .values({
-        refId: await nextBookRefId(),
-        title: bounty.title,
-        author: bounty.author,
-        isbn: bounty.isbn,
-        hubId: bounty.hubId,
-        source: "bounty",
-        status: "available",
-        condition: submission.condition,
-        buyPrice: 0,
-        borrowPrice: 0,
-        ownerId: submission.studentId,
-      })
-      .returning();
+    const submission = await db.query.bountySubmissions.findFirst({
+      where: eq(bountySubmissions.id, id),
+    });
+    if (!submission) {
+      res.status(404).json({ error: "Submission not found" });
+      return;
+    }
 
-    const paidAt = new Date();
-    const [acquisition] = await tx
-      .insert(bountyAcquisitions)
-      .values({
+    const bounty = await db.query.bountyRequests.findFirst({
+      where: eq(bountyRequests.id, submission.bountyRequestId),
+    });
+    if (!bounty) {
+      res.status(404).json({ error: "Bounty not found" });
+      return;
+    }
+    try {
+      requireHubStaff(auth, bounty.hubId);
+    } catch {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+
+    if (submission.status === "inventory_confirmed") {
+      const existing = await db.query.bountyAcquisitions.findFirst({
+        where: eq(bountyAcquisitions.bountySubmissionId, submission.id),
+      });
+      res.json({
+        alreadyConfirmed: true,
+        acquisition: existing ?? null,
+        submission: {
+          ...serializeSubmission(submission),
+          ...serializeAcquisition(existing),
+        },
+      });
+      return;
+    }
+
+    if (submission.status !== "delivered") {
+      res.status(400).json({ error: "Submission not ready for inventory intake" });
+      return;
+    }
+
+    const result = await db.transaction(async (tx) => {
+      const existing = await tx.query.bountyAcquisitions.findFirst({
+        where: eq(bountyAcquisitions.bountySubmissionId, submission.id),
+      });
+      if (existing) {
+        return { book: null, acquisition: existing, alreadyConfirmed: true };
+      }
+
+      const [book] = await tx
+        .insert(books)
+        .values({
+          refId: await nextBookRefId(),
+          title: bounty.title,
+          author: bounty.author,
+          isbn: bounty.isbn,
+          hubId: bounty.hubId,
+          source: "bounty",
+          status: "available",
+          condition: submission.condition,
+          buyPrice: 0,
+          borrowPrice: 0,
+          ownerId: submission.studentId,
+        })
+        .returning();
+
+      const paidAt = new Date();
+      const [acquisition] = await tx
+        .insert(bountyAcquisitions)
+        .values({
+          bountyRequestId: bounty.id,
+          bountySubmissionId: submission.id,
+          inventoryCopyId: book!.id,
+          studentId: submission.studentId,
+          rewardAmount: bounty.rewardAmount,
+          rewardStatus: "paid",
+          rewardPaidAt: paidAt,
+        })
+        .returning();
+
+      await tx
+        .update(bountySubmissions)
+        .set({ status: "inventory_confirmed", updatedAt: paidAt })
+        .where(eq(bountySubmissions.id, id));
+
+      let wallet = await tx.query.wallets.findFirst({
+        where: eq(wallets.userId, submission.studentId),
+      });
+      if (!wallet) {
+        [wallet] = await tx
+          .insert(wallets)
+          .values({ userId: submission.studentId, balance: 0 })
+          .returning();
+      }
+      if (bounty.rewardAmount > 0) {
+        await tx
+          .update(wallets)
+          .set({
+            balance: sql`${wallets.balance} + ${bounty.rewardAmount}`,
+            updatedAt: paidAt,
+          })
+          .where(eq(wallets.id, wallet!.id));
+        await tx.insert(walletTransactions).values({
+          walletId: wallet!.id,
+          type: "credit",
+          amount: bounty.rewardAmount,
+          description: `Bounty reward: ${bounty.title}`,
+        });
+      }
+
+      const acquiredCount = await tx
+        .select({ n: count() })
+        .from(bountyAcquisitions)
+        .where(eq(bountyAcquisitions.bountyRequestId, bounty.id));
+
+      const fulfilled = Number(acquiredCount[0]?.n ?? 0) >= bounty.quantity;
+      await tx
+        .update(bountyRequests)
+        .set({
+          status: fulfilled ? "completed" : "open",
+          updatedAt: new Date(),
+        })
+        .where(eq(bountyRequests.id, bounty.id));
+
+      await tryAssignCopyToWaitingRequests(
+        tx as Parameters<typeof tryAssignCopyToWaitingRequests>[0],
+        {
+          id: book!.id,
+          hubId: book!.hubId,
+          title: book!.title,
+        },
+      );
+
+      return { book, acquisition, alreadyConfirmed: false };
+    });
+
+    if (result.alreadyConfirmed || !result.book) {
+      res.json({
+        alreadyConfirmed: true,
+        acquisition: result.acquisition,
+        submission: {
+          ...serializeSubmission({ ...submission, status: "inventory_confirmed" }),
+          ...serializeAcquisition(result.acquisition),
+        },
+      });
+      return;
+    }
+
+    await logAudit({
+      userId: auth.userId,
+      actorId: auth.userId,
+      hubId: bounty.hubId,
+      action: "BOUNTY_ACQUISITION",
+      resourceType: "book",
+      resourceId: result.book!.id,
+      meta: {
         bountyRequestId: bounty.id,
         bountySubmissionId: submission.id,
-        inventoryCopyId: book!.id,
-        studentId: submission.studentId,
         rewardAmount: bounty.rewardAmount,
-        rewardStatus: "paid",
-        rewardPaidAt: paidAt,
-      })
-      .returning();
-
-    await tx
-      .update(bountySubmissions)
-      .set({ status: "inventory_confirmed", updatedAt: paidAt })
-      .where(eq(bountySubmissions.id, id));
-
-    let wallet = await tx.query.wallets.findFirst({
-      where: eq(wallets.userId, submission.studentId),
-    });
-    if (!wallet) {
-      [wallet] = await tx
-        .insert(wallets)
-        .values({ userId: submission.studentId, balance: 0 })
-        .returning();
-    }
-    if (bounty.rewardAmount > 0) {
-      await tx
-        .update(wallets)
-        .set({
-          balance: sql`${wallets.balance} + ${bounty.rewardAmount}`,
-          updatedAt: paidAt,
-        })
-        .where(eq(wallets.id, wallet!.id));
-      await tx.insert(walletTransactions).values({
-        walletId: wallet!.id,
-        type: "credit",
-        amount: bounty.rewardAmount,
-        description: `Bounty reward: ${bounty.title}`,
-      });
-    }
-
-    const acquiredCount = await tx
-      .select({ n: count() })
-      .from(bountyAcquisitions)
-      .where(eq(bountyAcquisitions.bountyRequestId, bounty.id));
-
-    const fulfilled = Number(acquiredCount[0]?.n ?? 0) >= bounty.quantity;
-    await tx
-      .update(bountyRequests)
-      .set({
-        status: fulfilled ? "completed" : "open",
-        updatedAt: new Date(),
-      })
-      .where(eq(bountyRequests.id, bounty.id));
-
-    await tryAssignCopyToWaitingRequests(tx as Parameters<typeof tryAssignCopyToWaitingRequests>[0], {
-      id: book!.id,
-      hubId: book!.hubId,
-      title: book!.title,
+      },
     });
 
-    return { book, acquisition, alreadyConfirmed: false };
-  });
+    await notifyUser({
+      userId: submission.studentId,
+      kind: "bounty_added_to_inventory",
+      body: `"${bounty.title}" was added to hub inventory. Reward: ₹${bounty.rewardAmount.toLocaleString("en-IN")}.`,
+    });
 
-  if (result.alreadyConfirmed || !result.book) {
     res.json({
-      alreadyConfirmed: true,
+      book: result.book,
       acquisition: result.acquisition,
       submission: {
         ...serializeSubmission({ ...submission, status: "inventory_confirmed" }),
         ...serializeAcquisition(result.acquisition),
       },
     });
-    return;
-  }
-
-  await logAudit({
-    userId: auth.userId,
-    actorId: auth.userId,
-    hubId: bounty.hubId,
-    action: "BOUNTY_ACQUISITION",
-    resourceType: "book",
-    resourceId: result.book!.id,
-    meta: {
-      bountyRequestId: bounty.id,
-      bountySubmissionId: submission.id,
-      rewardAmount: bounty.rewardAmount,
-    },
-  });
-
-  await notifyUser({
-    userId: submission.studentId,
-    kind: "bounty_added_to_inventory",
-    body: `"${bounty.title}" was added to hub inventory. Reward: ₹${bounty.rewardAmount.toLocaleString("en-IN")}.`,
-  });
-
-  res.json({
-    book: result.book,
-    acquisition: result.acquisition,
-    submission: {
-      ...serializeSubmission({ ...submission, status: "inventory_confirmed" }),
-      ...serializeAcquisition(result.acquisition),
-    },
-  });
-});
+  },
+);
 
 export default router;

@@ -78,12 +78,8 @@
           "name": "audit_logs_user_id_users_id_fk",
           "tableFrom": "audit_logs",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -91,12 +87,8 @@
           "name": "audit_logs_actor_id_users_id_fk",
           "tableFrom": "audit_logs",
           "tableTo": "users",
-          "columnsFrom": [
-            "actor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -104,12 +96,8 @@
           "name": "audit_logs_hub_id_hubs_id_fk",
           "tableFrom": "audit_logs",
           "tableTo": "hubs",
-          "columnsFrom": [
-            "hub_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["hub_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -169,12 +157,8 @@
           "name": "book_request_hub_reassignments_request_id_book_requests_id_fk",
           "tableFrom": "book_request_hub_reassignments",
           "tableTo": "book_requests",
-          "columnsFrom": [
-            "request_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["request_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -182,12 +166,8 @@
           "name": "book_request_hub_reassignments_from_hub_id_hubs_id_fk",
           "tableFrom": "book_request_hub_reassignments",
           "tableTo": "hubs",
-          "columnsFrom": [
-            "from_hub_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["from_hub_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -195,12 +175,8 @@
           "name": "book_request_hub_reassignments_to_hub_id_hubs_id_fk",
           "tableFrom": "book_request_hub_reassignments",
           "tableTo": "hubs",
-          "columnsFrom": [
-            "to_hub_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["to_hub_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -208,12 +184,8 @@
           "name": "book_request_hub_reassignments_reassigned_by_users_id_fk",
           "tableFrom": "book_request_hub_reassignments",
           "tableTo": "users",
-          "columnsFrom": [
-            "reassigned_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["reassigned_by"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -324,12 +296,8 @@
           "name": "book_requests_user_id_users_id_fk",
           "tableFrom": "book_requests",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -337,12 +305,8 @@
           "name": "book_requests_hub_id_hubs_id_fk",
           "tableFrom": "book_requests",
           "tableTo": "hubs",
-          "columnsFrom": [
-            "hub_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["hub_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -350,12 +314,8 @@
           "name": "book_requests_assigned_copy_id_books_id_fk",
           "tableFrom": "book_requests",
           "tableTo": "books",
-          "columnsFrom": [
-            "assigned_copy_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["assigned_copy_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -363,12 +323,8 @@
           "name": "book_requests_assigned_by_users_id_fk",
           "tableFrom": "book_requests",
           "tableTo": "users",
-          "columnsFrom": [
-            "assigned_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["assigned_by"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -536,12 +492,8 @@
           "name": "books_hub_id_hubs_id_fk",
           "tableFrom": "books",
           "tableTo": "hubs",
-          "columnsFrom": [
-            "hub_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["hub_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -549,12 +501,8 @@
           "name": "books_owner_id_users_id_fk",
           "tableFrom": "books",
           "tableTo": "users",
-          "columnsFrom": [
-            "owner_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -562,12 +510,8 @@
           "name": "books_borrower_user_id_users_id_fk",
           "tableFrom": "books",
           "tableTo": "users",
-          "columnsFrom": [
-            "borrower_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["borrower_user_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -575,12 +519,8 @@
           "name": "books_returned_hub_id_hubs_id_fk",
           "tableFrom": "books",
           "tableTo": "hubs",
-          "columnsFrom": [
-            "returned_hub_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["returned_hub_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -588,12 +528,8 @@
           "name": "books_sold_to_user_id_users_id_fk",
           "tableFrom": "books",
           "tableTo": "users",
-          "columnsFrom": [
-            "sold_to_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["sold_to_user_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -601,12 +537,8 @@
           "name": "books_acquired_from_hub_id_hubs_id_fk",
           "tableFrom": "books",
           "tableTo": "hubs",
-          "columnsFrom": [
-            "acquired_from_hub_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["acquired_from_hub_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -614,12 +546,8 @@
           "name": "books_target_hub_id_hubs_id_fk",
           "tableFrom": "books",
           "tableTo": "hubs",
-          "columnsFrom": [
-            "target_hub_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["target_hub_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -627,12 +555,8 @@
           "name": "books_original_hub_id_hubs_id_fk",
           "tableFrom": "books",
           "tableTo": "hubs",
-          "columnsFrom": [
-            "original_hub_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["original_hub_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -642,9 +566,7 @@
         "books_ref_id_unique": {
           "name": "books_ref_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "ref_id"
-          ]
+          "columns": ["ref_id"]
         }
       },
       "policies": {},
@@ -708,9 +630,7 @@
         "hubs_public_id_unique": {
           "name": "hubs_public_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "public_id"
-          ]
+          "columns": ["public_id"]
         }
       },
       "policies": {},
@@ -772,12 +692,8 @@
           "name": "in_app_notifications_user_id_users_id_fk",
           "tableFrom": "in_app_notifications",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -785,12 +701,8 @@
           "name": "in_app_notifications_book_request_id_book_requests_id_fk",
           "tableFrom": "in_app_notifications",
           "tableTo": "book_requests",
-          "columnsFrom": [
-            "book_request_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["book_request_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -857,12 +769,8 @@
           "name": "lifecycle_events_user_id_users_id_fk",
           "tableFrom": "lifecycle_events",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -870,12 +778,8 @@
           "name": "lifecycle_events_hub_id_hubs_id_fk",
           "tableFrom": "lifecycle_events",
           "tableTo": "hubs",
-          "columnsFrom": [
-            "hub_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["hub_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -883,12 +787,8 @@
           "name": "lifecycle_events_book_id_books_id_fk",
           "tableFrom": "lifecycle_events",
           "tableTo": "books",
-          "columnsFrom": [
-            "book_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["book_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -936,12 +836,8 @@
           "name": "memberships_user_id_users_id_fk",
           "tableFrom": "memberships",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -949,12 +845,8 @@
           "name": "memberships_hub_id_hubs_id_fk",
           "tableFrom": "memberships",
           "tableTo": "hubs",
-          "columnsFrom": [
-            "hub_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["hub_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1036,12 +928,8 @@
           "name": "notification_deliveries_user_id_users_id_fk",
           "tableFrom": "notification_deliveries",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1189,12 +1077,8 @@
           "name": "p2p_listings_owner_id_users_id_fk",
           "tableFrom": "p2p_listings",
           "tableTo": "users",
-          "columnsFrom": [
-            "owner_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1202,12 +1086,8 @@
           "name": "p2p_listings_hub_id_hubs_id_fk",
           "tableFrom": "p2p_listings",
           "tableTo": "hubs",
-          "columnsFrom": [
-            "hub_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["hub_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1215,12 +1095,8 @@
           "name": "p2p_listings_dropoff_hub_id_hubs_id_fk",
           "tableFrom": "p2p_listings",
           "tableTo": "hubs",
-          "columnsFrom": [
-            "dropoff_hub_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["dropoff_hub_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1228,12 +1104,8 @@
           "name": "p2p_listings_buyer_id_users_id_fk",
           "tableFrom": "p2p_listings",
           "tableTo": "users",
-          "columnsFrom": [
-            "buyer_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["buyer_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1241,12 +1113,8 @@
           "name": "p2p_listings_borrower_user_id_users_id_fk",
           "tableFrom": "p2p_listings",
           "tableTo": "users",
-          "columnsFrom": [
-            "borrower_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["borrower_user_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1254,12 +1122,8 @@
           "name": "p2p_listings_returned_hub_id_hubs_id_fk",
           "tableFrom": "p2p_listings",
           "tableTo": "hubs",
-          "columnsFrom": [
-            "returned_hub_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["returned_hub_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1307,12 +1171,8 @@
           "name": "subscriptions_user_id_users_id_fk",
           "tableFrom": "subscriptions",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1322,9 +1182,7 @@
         "subscriptions_user_id_unique": {
           "name": "subscriptions_user_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "user_id"
-          ]
+          "columns": ["user_id"]
         }
       },
       "policies": {},
@@ -1407,16 +1265,12 @@
         "users_public_id_unique": {
           "name": "users_public_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "public_id"
-          ]
+          "columns": ["public_id"]
         },
         "users_email_unique": {
           "name": "users_email_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "email"
-          ]
+          "columns": ["email"]
         }
       },
       "policies": {},

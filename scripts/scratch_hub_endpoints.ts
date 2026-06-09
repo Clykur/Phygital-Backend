@@ -1,14 +1,17 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const hubTsPath = path.join(repoRoot, 'src/routes/hub.ts');
-let code = fs.readFileSync(hubTsPath, 'utf8');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const hubTsPath = path.join(repoRoot, "src/routes/hub.ts");
+let code = fs.readFileSync(hubTsPath, "utf8");
 
 // add imports
 if (!code.includes("memberships,")) {
-  code = code.replace("  users,\n} from \"@workspace/db/schema\";", "  users,\n  memberships,\n  wallets,\n  walletTransactions,\n  userSubscriptions,\n  subscriptionPlans,\n  lifecycleEvents,\n} from \"@workspace/db/schema\";");
+  code = code.replace(
+    '  users,\n} from "@workspace/db/schema";',
+    '  users,\n  memberships,\n  wallets,\n  walletTransactions,\n  userSubscriptions,\n  subscriptionPlans,\n  lifecycleEvents,\n} from "@workspace/db/schema";',
+  );
 }
 
 const endpoints = `

@@ -14,6 +14,8 @@ import { sql } from "drizzle-orm";
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
+  /** Supabase Auth user id (`auth.users.id`) when linked. */
+  authUserId: uuid("auth_user_id"),
   /** Public readable ID (e.g. STD7G4K9X2Q / ADM9Q2X6T4R) */
   publicId: text("public_id").unique(),
   name: text("name").notNull(),
@@ -26,9 +28,7 @@ export const users = pgTable("users", {
   /** Object key in private profile-images bucket (Supabase) or relative path under upload dir (local). */
   avatarStoragePath: text("avatar_storage_path"),
   avatarUpdatedAt: timestamp("avatar_updated_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const subscriptions = pgTable("subscriptions", {
@@ -258,9 +258,7 @@ export const auditLogs = pgTable("audit_logs", {
   resourceId: text("resource_id"),
   meta: jsonb("meta").$type<Record<string, unknown>>(),
   denial: boolean("denial").notNull().default(false),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 /** Reliable notification outbox; worker delivers into in_app_notifications. */

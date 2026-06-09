@@ -48,8 +48,7 @@ router.get("/books", authMiddleware, async (req, res) => {
   await reconcileOverdueBooks();
 
   const rawQ = typeof req.query["q"] === "string" ? req.query["q"].trim() : "";
-  const availableOnly =
-    req.query["availableOnly"] === "1" || req.query["availableOnly"] === "true";
+  const availableOnly = req.query["availableOnly"] === "1" || req.query["availableOnly"] === "true";
 
   if (rawQ.length > 0) {
     const pattern = `%${escapeIlikePattern(rawQ)}%`;

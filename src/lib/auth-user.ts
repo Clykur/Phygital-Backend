@@ -29,7 +29,7 @@ export async function loadAuthUser(userId: string): Promise<AuthUser | null> {
     .where(eq(memberships.userId, userId));
   const staffMems = mems.filter((m) => isHubStaffRole(m.role));
   let hubStaffHubIds = [...new Set(staffMems.map((m) => m.hubId))];
-  let hubMemberships: HubMembership[] = staffMems.map((m) => ({
+  const hubMemberships: HubMembership[] = staffMems.map((m) => ({
     hubId: m.hubId,
     role: m.role === "hub_admin" ? "hub_admin" : "hub_user",
   }));

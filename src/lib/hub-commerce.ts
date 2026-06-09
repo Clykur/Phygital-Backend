@@ -33,8 +33,7 @@ function titleForRow(
   titleByListingId: Map<string, string>,
 ): string | null {
   if (resourceType === "book" && resourceId) return titleByBookId.get(resourceId) ?? null;
-  if (resourceType === "p2p_listing" && resourceId)
-    return titleByListingId.get(resourceId) ?? null;
+  if (resourceType === "p2p_listing" && resourceId) return titleByListingId.get(resourceId) ?? null;
   return null;
 }
 
@@ -159,9 +158,7 @@ export async function buildHubCommercePayload(
       allIds
         .filter(
           (r) =>
-            r.resourceType === "book" &&
-            r.resourceId &&
-            uuidParam.safeParse(r.resourceId).success,
+            r.resourceType === "book" && r.resourceId && uuidParam.safeParse(r.resourceId).success,
         )
         .map((r) => r.resourceId as string),
     ),
@@ -220,7 +217,7 @@ export async function buildHubCommercePayload(
       action: r.action,
       summary: inboundSummary(r.action, title),
       atHubId: r.hubId,
-      atHubName: r.hubId ? hubNameById.get(r.hubId) ?? null : null,
+      atHubName: r.hubId ? (hubNameById.get(r.hubId) ?? null) : null,
       actorUserId: r.userId,
       resourceType: r.resourceType,
       resourceId: r.resourceId,
@@ -235,7 +232,7 @@ export async function buildHubCommercePayload(
       action: r.action,
       summary: outboundSummary(r.action, title),
       atHubId: r.hubId,
-      atHubName: r.hubId ? hubNameById.get(r.hubId) ?? null : null,
+      atHubName: r.hubId ? (hubNameById.get(r.hubId) ?? null) : null,
       resourceType: r.resourceType,
       resourceId: r.resourceId,
       createdAt: r.createdAt.toISOString(),
@@ -255,7 +252,7 @@ export async function buildHubCommercePayload(
       hubCount: effective.length,
       label:
         effective.length === 1
-          ? hubLabelById.get(effective[0]!) ?? "Hub"
+          ? (hubLabelById.get(effective[0]!) ?? "Hub")
           : `${effective.length} hubs`,
     },
     inbound,

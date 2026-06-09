@@ -10,7 +10,6 @@ import { logger } from "../lib/logger";
 const router = Router();
 router.use(authMiddleware, requireAuth);
 
-
 router.get("/balance", async (req, res) => {
   try {
     let [wallet] = await db
@@ -30,10 +29,7 @@ router.get("/balance", async (req, res) => {
     );
     res.json({ balance: wallet.balance });
   } catch (err) {
-    logger.error(
-      { err, walletUserId: req.auth!.userId },
-      "wallet balance failed",
-    );
+    logger.error({ err, walletUserId: req.auth!.userId }, "wallet balance failed");
     throw err;
   }
 });
@@ -64,14 +60,10 @@ router.get("/transactions", async (req, res) => {
     );
     res.json({ transactions });
   } catch (err) {
-    logger.error(
-      { err, walletUserId: req.auth!.userId },
-      "wallet transactions failed",
-    );
+    logger.error({ err, walletUserId: req.auth!.userId }, "wallet transactions failed");
     throw err;
   }
 });
-
 
 const debitSchema = z.object({
   amount: z.number().positive(),
@@ -88,11 +80,18 @@ router.post("/debit", async (req, res) => {
 
   try {
     await db.transaction(async (tx) => {
-      const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, req.auth!.userId)).limit(1);
+      const [wallet] = await tx
+        .select()
+        .from(wallets)
+        .where(eq(wallets.userId, req.auth!.userId))
+        .limit(1);
       if (!wallet) throw new Error("Wallet not found");
       if (wallet.balance < amount) throw new Error("Insufficient funds");
-      
-      await tx.update(wallets).set({ balance: wallet.balance - amount }).where(eq(wallets.id, wallet.id));
+
+      await tx
+        .update(wallets)
+        .set({ balance: wallet.balance - amount })
+        .where(eq(wallets.id, wallet.id));
       await tx.insert(walletTransactions).values({
         walletId: wallet.id,
         type: "debit",

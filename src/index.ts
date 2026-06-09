@@ -27,10 +27,8 @@ async function runWorkerTick(): Promise<void> {
 
 async function bootstrapLocalServer(): Promise<void> {
   const isProd = process.env.NODE_ENV === "production";
-  const enableSeed =
-    process.env.ENABLE_SEED === "1" || process.env.ENABLE_SEED === "true";
-  const enableWorkers =
-    process.env.ENABLE_WORKERS === "1" || process.env.ENABLE_WORKERS === "true";
+  const enableSeed = process.env.ENABLE_SEED === "1" || process.env.ENABLE_SEED === "true";
+  const enableWorkers = process.env.ENABLE_WORKERS === "1" || process.env.ENABLE_WORKERS === "true";
 
   // In production, don't auto-seed or run DB-heavy background workers unless explicitly enabled.
   // This prevents the API from spamming errors / failing requests when the DB is temporarily unreachable.
@@ -60,9 +58,7 @@ async function bootstrapLocalServer(): Promise<void> {
       logger.error({ err: e }, "initial worker tick failed");
     }
     setInterval(() => {
-      void runWorkerTick().catch((e) =>
-        logger.error({ err: e }, "worker tick failed"),
-      );
+      void runWorkerTick().catch((e) => logger.error({ err: e }, "worker tick failed"));
     }, WORKER_INTERVAL_MS);
   }
 }

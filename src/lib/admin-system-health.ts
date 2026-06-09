@@ -1,6 +1,6 @@
 import { and, count, eq, inArray, isNotNull, lt, sql } from "drizzle-orm";
 import { db } from "@workspace/db";
-import { auditLogs, bookRequests, books, hubs, notificationDeliveries } from "@workspace/db/schema";
+import { auditLogs, bookRequests, books, hubs } from "@workspace/db/schema";
 import { normalizeBookTitle } from "./title-match";
 
 function stuckRequestHours(): number {
@@ -106,9 +106,7 @@ export async function getSystemHealth(hubIdFilter?: string): Promise<SystemHealt
       bookTitle: bookRequests.bookTitle,
     })
     .from(bookRequests)
-    .where(
-      and(eq(bookRequests.status, "fulfilled"), lt(bookRequests.updatedAt, fulfilledBefore)),
-    )
+    .where(and(eq(bookRequests.status, "fulfilled"), lt(bookRequests.updatedAt, fulfilledBefore)))
     .limit(500);
   for (const r of fulfilledNotReady) {
     if (!inHubScope(r)) continue;
@@ -192,7 +190,7 @@ export async function getSystemHealth(hubIdFilter?: string): Promise<SystemHealt
       .limit(500);
     const byBook = new Map<string, { requestId: string; hubId: string; startedAt: string }>();
     for (const r of reqRows) {
-      if (!r.assignedCopyId) continue;
+      if (!r.assignedCopyId || !r.hubId) continue;
       const existing = byBook.get(r.assignedCopyId);
       if (!existing || existing.startedAt > r.updatedAt.toISOString()) {
         byBook.set(r.assignedCopyId, {
@@ -238,7 +236,11 @@ export async function getSystemHealth(hubIdFilter?: string): Promise<SystemHealt
       id: `request-near-expiry-${r.id}`,
       severity: "warning",
       description: "Request is nearing expiry and needs immediate desk action.",
-      relatedEntity: { type: "request", id: r.id, label: r.bookTitle?.trim() || "Untitled request" },
+      relatedEntity: {
+        type: "request",
+        id: r.id,
+        label: r.bookTitle?.trim() || "Untitled request",
+      },
       hubId: r.hubId,
       startedAt: r.expiresAt.toISOString(),
       action: { kind: "close_request", requestId: r.id, outcome: "expired" },
@@ -256,14 +258,7 @@ export async function getSystemHealth(hubIdFilter?: string): Promise<SystemHealt
       updatedAt: bookRequests.updatedAt,
     })
     .from(bookRequests)
-    .where(
-      inArray(bookRequests.status, [
-        "requested",
-        "routed",
-        "fulfilled",
-        "ready",
-      ]),
-    );
+    .where(inArray(bookRequests.status, ["requested", "routed", "fulfilled", "ready"]));
   const byHubTitle = new Map<string, { sample: string; ids: string[] }>();
   const firstReqByHubTitle = new Map<string, { id: string; updatedAt: string }>();
   for (const r of allReq) {
@@ -284,10 +279,7 @@ export async function getSystemHealth(hubIdFilter?: string): Promise<SystemHealt
     .select({ hubId: books.hubId, title: books.title, id: books.id })
     .from(books)
     .where(
-      and(
-        inArray(books.status, ["available", "reserved"]),
-        eq(books.source, "hub_inventory"),
-      ),
+      and(inArray(books.status, ["available", "reserved"]), eq(books.source, "hub_inventory")),
     );
   const availableByHubTitle = new Map<string, number>();
   for (const b of avail) {
@@ -307,7 +299,7 @@ export async function getSystemHealth(hubIdFilter?: string): Promise<SystemHealt
     if (v.ids.length < 2) continue;
     const availN = availableByHubTitle.get(k) ?? 0;
     if (availN >= v.ids.length) continue;
-    const [hubId, titleKey] = k.split("::", 2);
+    const [hubId] = k.split("::", 2);
     if (!hubId || (hubIdFilter && hubId !== hubIdFilter)) continue;
     const lead = firstReqByHubTitle.get(k);
     if (!lead) continue;
@@ -348,9 +340,7 @@ export async function getSystemHealth(hubIdFilter?: string): Promise<SystemHealt
     .where(and(isNotNull(auditLogs.hubId), sql`${auditLogs.createdAt} >= ${sevenDaysAgo}`))
     .groupBy(auditLogs.hubId);
   const hubActivityMap = new Map(
-    recentHubActivity
-      .filter((r) => r.hubId != null)
-      .map((r) => [r.hubId as string, Number(r.n)]),
+    recentHubActivity.filter((r) => r.hubId != null).map((r) => [r.hubId as string, Number(r.n)]),
   );
   for (const h of activeHubs) {
     if (hubIdFilter && h.id !== hubIdFilter) continue;
@@ -359,7 +349,9 @@ export async function getSystemHealth(hubIdFilter?: string): Promise<SystemHealt
     const [openReq] = await db
       .select({ id: bookRequests.id, updatedAt: bookRequests.updatedAt })
       .from(bookRequests)
-      .where(and(eq(bookRequests.hubId, h.id), inArray(bookRequests.status, ["requested", "routed"])))
+      .where(
+        and(eq(bookRequests.hubId, h.id), inArray(bookRequests.status, ["requested", "routed"])),
+      )
       .limit(1);
     if (!openReq) continue;
     issues.push({

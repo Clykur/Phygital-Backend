@@ -13,7 +13,6 @@ declare global {
 
 import { logger } from "../lib/logger";
 
-
 export async function authMiddleware(
   req: Request,
   _res: Response,
@@ -58,12 +57,7 @@ export async function authMiddleware(
   next();
 }
 
-
-export function requireAuth(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): void {
+export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   if (!req.auth) {
     res.status(401).json({ error: "Unauthorized" });
     return;
@@ -84,11 +78,14 @@ function normalizePathname(url: string): string {
 const PUBLIC_AUTH: { method: string; path: string }[] = [
   { method: "POST", path: "/api/auth/login" },
   { method: "POST", path: "/api/auth/register" },
+  { method: "POST", path: "/api/auth/google" },
+  { method: "POST", path: "/api/auth/session" },
 ];
 
 const PUBLIC_GET_PATHS = new Set([
   "/api/healthz",
   "/api/ready",
+  "/api/auth/config",
   "/api/catalog/books",
   "/api/catalog/hubs",
   "/api/p2p/listings",
@@ -105,11 +102,7 @@ function isPublicUnauthenticated(pathname: string, method: string): boolean {
   return false;
 }
 
-export function requireApiAuth(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): void {
+export function requireApiAuth(req: Request, res: Response, next: NextFunction): void {
   if (req.method === "OPTIONS") {
     next();
     return;

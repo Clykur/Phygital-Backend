@@ -10,7 +10,7 @@ export type InventoryStats = {
 };
 
 /**
- * Computes inventory aggregations (Total, Available, Issued, Reserved) 
+ * Computes inventory aggregations (Total, Available, Issued, Reserved)
  * for a list of (hubId, title) combinations.
  */
 export async function getInventoryStatsForTitles(
@@ -41,7 +41,7 @@ export async function getInventoryStatsForTitles(
   for (const row of rows) {
     // If querying multiple hubs, we key by "hubId:title", otherwise just "title"
     const key = hubId ? row.title : `${row.hubId}:${row.title}`;
-    
+
     if (!statsMap[key]) {
       statsMap[key] = {
         total: 0,
@@ -50,12 +50,12 @@ export async function getInventoryStatsForTitles(
         reserved: 0,
       };
     }
-    
+
     const stat = statsMap[key];
     const n = Number(row.n);
-    
+
     stat.total += n;
-    
+
     if (row.status === "available") {
       stat.available += n;
     } else if (row.status === "reserved") {

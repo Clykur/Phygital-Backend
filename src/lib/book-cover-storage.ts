@@ -18,7 +18,8 @@ export function getPlaceholderBookCoverPublicUrl(): string {
   const supabase = getSupabaseAdmin();
   const { data } = supabase.storage.from(bucket).getPublicUrl(storagePath);
   return data.publicUrl;
-}import { randomUUID } from "node:crypto";
+}
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
@@ -39,8 +40,8 @@ function extensionForMimetype(mimetype: string): string {
 function supabaseBookStorageConfigured(): boolean {
   return Boolean(
     process.env["SUPABASE_URL"]?.trim() &&
-      process.env["SUPABASE_SERVICE_ROLE_KEY"]?.trim() &&
-      process.env["SUPABASE_BOOK_IMAGES_BUCKET"]?.trim(),
+    process.env["SUPABASE_SERVICE_ROLE_KEY"]?.trim() &&
+    process.env["SUPABASE_BOOK_IMAGES_BUCKET"]?.trim(),
   );
 }
 

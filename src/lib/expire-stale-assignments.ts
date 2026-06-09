@@ -22,7 +22,7 @@ export async function expireStaleAssignmentsWorker(): Promise<{
     if (transient) {
       logger.warn(
         { msg: msg.slice(0, 240) },
-        "expire stale assignments worker skipped (database pool busy or unreachable)"
+        "expire stale assignments worker skipped (database pool busy or unreachable)",
       );
       return { processed: 0, expired: 0 };
     }
@@ -34,9 +34,7 @@ async function expireStaleAssignmentsWorkerInner(): Promise<{
   processed: number;
   expired: number;
 }> {
-  const staleThreshold = new Date(
-    Date.now() - STALE_ASSIGNMENT_HOURS * 60 * 60 * 1000
-  );
+  const staleThreshold = new Date(Date.now() - STALE_ASSIGNMENT_HOURS * 60 * 60 * 1000);
 
   const staleAssignments = await db
     .select()
@@ -44,8 +42,8 @@ async function expireStaleAssignmentsWorkerInner(): Promise<{
     .where(
       and(
         inArray(bookRequests.status, ["fulfilled", "ready"]),
-        lte(bookRequests.assignedAt, staleThreshold)
-      )
+        lte(bookRequests.assignedAt, staleThreshold),
+      ),
     );
 
   let expired = 0;
@@ -65,10 +63,7 @@ async function expireStaleAssignmentsWorkerInner(): Promise<{
         })
         .where(eq(bookRequests.id, req.id));
 
-      await tx
-        .update(books)
-        .set({ status: "available" })
-        .where(eq(books.id, req.assignedCopyId!));
+      await tx.update(books).set({ status: "available" }).where(eq(books.id, req.assignedCopyId!));
     });
 
     await logAudit({

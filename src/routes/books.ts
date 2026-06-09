@@ -1,23 +1,21 @@
 import { Router, type IRouter } from "express";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { z } from "zod";
 import { db } from "@workspace/db";
-import { bookRequests, books, wallets, subscriptions, walletTransactions } from "@workspace/db/schema";
+import {
+  bookRequests,
+  books,
+  wallets,
+  subscriptions,
+  walletTransactions,
+} from "@workspace/db/schema";
 import { ACTIONS } from "../lib/rbac/actions";
 import { authorize } from "../lib/rbac/authorize";
 import { logAudit } from "../lib/audit";
 import { pathParam } from "../lib/path-param";
 import { authMiddleware, requireAuth } from "../middleware/auth";
 import { checkoutDueAt, reconcileOverdueBooks } from "../lib/books-lifecycle";
-import {
-  isPremiumOk,
-  requireActiveHub,
-  requireHubStaff,
-} from "../lib/hub-guards";
-import {
-  expireActiveRequestsForCopy,
-  tryAssignCopyToWaitingRequests,
-} from "../lib/hub-inventory";
+import { isPremiumOk, requireActiveHub, requireHubStaff } from "../lib/hub-guards";
+import { expireActiveRequestsForCopy, tryAssignCopyToWaitingRequests } from "../lib/hub-inventory";
 import { notifyUser } from "../lib/in-app-notifications";
 import type { DbClient } from "../lib/hub-guards";
 import { recordLifecycleEvent } from "../lib/lifecycle-events";
@@ -84,10 +82,18 @@ router.post("/:bookId/checkout", authMiddleware, requireAuth, async (req, res) =
         throw err;
       }
 
-      const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, auth.userId)).limit(1);
+      const [wallet] = await tx
+        .select()
+        .from(wallets)
+        .where(eq(wallets.userId, auth.userId))
+        .limit(1);
       if (!wallet) throw new Error("NO_WALLET");
 
-      const [sub] = await tx.select().from(subscriptions).where(eq(subscriptions.userId, auth.userId)).limit(1);
+      const [sub] = await tx
+        .select()
+        .from(subscriptions)
+        .where(eq(subscriptions.userId, auth.userId))
+        .limit(1);
       const isPremium = sub?.status === "active" && sub.premiumUntil > new Date();
 
       if (!isPremium) {
@@ -96,7 +102,10 @@ router.post("/:bookId/checkout", authMiddleware, requireAuth, async (req, res) =
           (err as Error & { status: number }).status = 402;
           throw err;
         }
-        await tx.update(wallets).set({ balance: wallet.balance - book.borrowPrice, updatedAt: new Date() }).where(eq(wallets.id, wallet.id));
+        await tx
+          .update(wallets)
+          .set({ balance: wallet.balance - book.borrowPrice, updatedAt: new Date() })
+          .where(eq(wallets.id, wallet.id));
         await tx.insert(walletTransactions).values({
           walletId: wallet.id,
           type: "debit",
@@ -143,7 +152,9 @@ router.post("/:bookId/checkout", authMiddleware, requireAuth, async (req, res) =
       return;
     }
     if (err.message === "SOLD") {
-      res.status(409).json({ error: "This copy was purchased and is no longer on the lending shelf." });
+      res
+        .status(409)
+        .json({ error: "This copy was purchased and is no longer on the lending shelf." });
       return;
     }
     if (err.message === "RESERVED") {
@@ -159,7 +170,9 @@ router.post("/:bookId/checkout", authMiddleware, requireAuth, async (req, res) =
       return;
     }
     if (err.message === "RACE") {
-      res.status(409).json({ error: "Another borrower just checked out this copy. Refresh and try again." });
+      res
+        .status(409)
+        .json({ error: "Another borrower just checked out this copy. Refresh and try again." });
       return;
     }
     if (err.message === "HUB_INACTIVE") {
@@ -247,7 +260,11 @@ router.post("/:bookId/purchase", authMiddleware, requireAuth, async (req, res) =
         (err as Error & { status: number }).status = 409;
         throw err;
       }
-      const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, auth.userId)).limit(1);
+      const [wallet] = await tx
+        .select()
+        .from(wallets)
+        .where(eq(wallets.userId, auth.userId))
+        .limit(1);
       if (!wallet) throw new Error("NO_WALLET");
       if (wallet.balance < book.buyPrice) {
         const err = new Error("INSUFFICIENT_CREDITS");
@@ -405,7 +422,9 @@ router.post("/:bookId/purchase", authMiddleware, requireAuth, async (req, res) =
       return;
     }
     if (err.message === "RACE") {
-      res.status(409).json({ error: "Another buyer just purchased this copy. Refresh and try again." });
+      res
+        .status(409)
+        .json({ error: "Another buyer just purchased this copy. Refresh and try again." });
       return;
     }
     if (err.message === "HUB_INACTIVE") {
@@ -685,24 +704,29 @@ router.patch("/:bookId", authMiddleware, requireAuth, async (req, res) => {
     }
     if (err.message === "NO_MANUAL_RESERVED") {
       res.status(409).json({
-        error: "Staff cannot set a copy to reserved directly. Reservations are created by the request queue.",
+        error:
+          "Staff cannot set a copy to reserved directly. Reservations are created by the request queue.",
       });
       return;
     }
     if (err.message === "P2P_NO_PATCH_SOLD") {
       res.status(409).json({
-        error: "Peer consignment copies must be sold via the peer listing (or convert to hub inventory first).",
+        error:
+          "Peer consignment copies must be sold via the peer listing (or convert to hub inventory first).",
       });
       return;
     }
     if (err.message === "RESERVED_BAD_TRANSITION") {
       res.status(409).json({
-        error: "Reserved copies can only be moved to available or unavailable until pickup is recorded.",
+        error:
+          "Reserved copies can only be moved to available or unavailable until pickup is recorded.",
       });
       return;
     }
     if (err.message === "SOLD_IMMUTABLE") {
-      res.status(409).json({ error: "Sold copies are immutable and cannot be returned to shelf states." });
+      res
+        .status(409)
+        .json({ error: "Sold copies are immutable and cannot be returned to shelf states." });
       return;
     }
     if (err.message === "CHECKED_OUT_NO_SALE") {
@@ -710,7 +734,9 @@ router.patch("/:bookId", authMiddleware, requireAuth, async (req, res) => {
       return;
     }
     if (err.message === "RESERVED_NO_MANUAL_CHECKOUT") {
-      res.status(409).json({ error: "Reserved copies cannot be checked out manually. Record pickup via request." });
+      res.status(409).json({
+        error: "Reserved copies cannot be checked out manually. Record pickup via request.",
+      });
       return;
     }
     throw e;

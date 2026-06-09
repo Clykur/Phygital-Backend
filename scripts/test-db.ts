@@ -10,7 +10,7 @@ async function run() {
       WHERE p.proname = 'get_student_dashboard_data';
     `);
     console.log(res.rows);
-  } catch(e) {
+  } catch (e) {
     console.error(e);
   } finally {
     pool.end();

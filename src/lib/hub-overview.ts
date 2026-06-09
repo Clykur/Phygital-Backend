@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { db } from "@workspace/db";
 import {
   auditLogs,
@@ -80,19 +80,10 @@ const ATTENTION_W = { pending: 3, ready: 2, p2p: 2 } as const;
  */
 export async function getSuperAdminNetworkKpis(): Promise<SuperAdminNetworkKpis> {
   const [hAll] = await db.select({ n: count() }).from(hubs);
-  const [hActive] = await db
-    .select({ n: count() })
-    .from(hubs)
-    .where(eq(hubs.isActive, true));
+  const [hActive] = await db.select({ n: count() }).from(hubs).where(eq(hubs.isActive, true));
   const [uAll] = await db.select({ n: count() }).from(users);
-  const [uStudent] = await db
-    .select({ n: count() })
-    .from(users)
-    .where(eq(users.baseRole, "user"));
-  const [uHub] = await db
-    .select({ n: count() })
-    .from(users)
-    .where(eq(users.baseRole, "hub"));
+  const [uStudent] = await db.select({ n: count() }).from(users).where(eq(users.baseRole, "user"));
+  const [uHub] = await db.select({ n: count() }).from(users).where(eq(users.baseRole, "hub"));
   const [uSup] = await db
     .select({ n: count() })
     .from(users)
@@ -139,16 +130,14 @@ export function computeSuperAdminDerivatives(
   const inCirc = m.available + m.checkedOut + m.reserved;
   const shelfUtilizationPct =
     inCirc > 0 ? Math.min(100, Math.round((100 * m.checkedOut) / inCirc)) : 0;
-  const transactionsPerDay =
-    periodLabelDays > 0 ? m.transactionsInRange / periodLabelDays : 0;
+  const transactionsPerDay = periodLabelDays > 0 ? m.transactionsInRange / periodLabelDays : 0;
   const delivered = requestBreakdown["delivered"] ?? 0;
   const cancelled = requestBreakdown["cancelled"] ?? 0;
   const terminal = delivered + cancelled;
   const requestTerminalSuccessPct =
     terminal > 0 ? Math.min(100, Math.round((100 * delivered) / terminal)) : null;
   const p2pDenom = m.p2pOnShelf + m.p2pPending;
-  const p2pDropoffBacklogRatio =
-    p2pDenom > 0 ? m.p2pPending / p2pDenom : 0;
+  const p2pDropoffBacklogRatio = p2pDenom > 0 ? m.p2pPending / p2pDenom : 0;
   return {
     periodLabelDays,
     transactionsPerDay,
@@ -198,6 +187,7 @@ export async function computeHubAttentionRanks(hubIds: string[]): Promise<HubAtt
     .where(inArray(bookRequests.hubId, hubIds))
     .groupBy(bookRequests.hubId, bookRequests.status);
   for (const row of reqRows) {
+    if (!row.hubId) continue;
     const a = byHub.get(row.hubId);
     if (!a) continue;
     const n = Number(row.n);
@@ -236,8 +226,7 @@ export async function computeHubAttentionRanks(hubIds: string[]): Promise<HubAtt
     const a = byHub.get(id)!;
     const m = metaById.get(id);
     const onShelf = a.av + a.co + a.res;
-    const shelfUtilizationPct =
-      onShelf > 0 ? Math.min(100, Math.round((100 * a.co) / onShelf)) : 0;
+    const shelfUtilizationPct = onShelf > 0 ? Math.min(100, Math.round((100 * a.co) / onShelf)) : 0;
     const attentionScore =
       ATTENTION_W.pending * a.pendingDesk +
       ATTENTION_W.ready * a.readyPickup +
@@ -308,9 +297,7 @@ export async function buildHubOverviewPayload(
     .where(inArray(hubs.id, effective));
 
   const primaryHub =
-    effective.length === 1
-      ? hubRows.find((h) => h.id === effective[0]) ?? null
-      : null;
+    effective.length === 1 ? (hubRows.find((h) => h.id === effective[0]) ?? null) : null;
 
   const bookStats = await db
     .select({
@@ -366,12 +353,7 @@ export async function buildHubOverviewPayload(
   const pendingRequestsRows = await db
     .select({ n: count() })
     .from(bookRequests)
-    .where(
-      and(
-        inArray(bookRequests.hubId, effective),
-        eq(bookRequests.status, "pending"),
-      ),
-    );
+    .where(and(inArray(bookRequests.hubId, effective), eq(bookRequests.status, "pending")));
   const pendingRequests = Number(pendingRequestsRows[0]?.n ?? 0);
 
   const readyPickupRows = await db
@@ -416,12 +398,7 @@ export async function buildHubOverviewPayload(
   const p2pPendingRows = await db
     .select({ n: count() })
     .from(p2pListings)
-    .where(
-      and(
-        inArray(p2pListings.hubId, effective),
-        eq(p2pListings.status, "pending_dropoff"),
-      ),
-    );
+    .where(and(inArray(p2pListings.hubId, effective), eq(p2pListings.status, "pending_dropoff")));
   const p2pPending = Number(p2pPendingRows[0]?.n ?? 0);
 
   const p2pOnShelfRows = await db
@@ -546,12 +523,7 @@ export async function buildHubOverviewPayload(
       updatedAt: p2pListings.updatedAt,
     })
     .from(p2pListings)
-    .where(
-      and(
-        inArray(p2pListings.hubId, effective),
-        eq(p2pListings.status, "pending_dropoff"),
-      ),
-    )
+    .where(and(inArray(p2pListings.hubId, effective), eq(p2pListings.status, "pending_dropoff")))
     .orderBy(desc(p2pListings.updatedAt))
     .limit(100);
 
@@ -646,7 +618,12 @@ export async function buildHubOverviewPayload(
     .where(
       and(
         inArray(bountyRequests.hubId, effective),
-        inArray(bountySubmissions.status, ["submitted", "awaiting_drop_off", "delivered", "under_review"]),
+        inArray(bountySubmissions.status, [
+          "submitted",
+          "awaiting_drop_off",
+          "delivered",
+          "under_review",
+        ]),
       ),
     );
   const bountyPendingDeliveries = Number(bountyPendingDeliveryRows[0]?.n ?? 0);
@@ -661,18 +638,23 @@ export async function buildHubOverviewPayload(
   const bountyFulfilledRows = await db
     .select({ n: count() })
     .from(bountyRequests)
-    .where(
-      and(inArray(bountyRequests.hubId, effective), eq(bountyRequests.status, "completed")),
-    );
+    .where(and(inArray(bountyRequests.hubId, effective), eq(bountyRequests.status, "completed")));
   const bountyFulfilledRequests = Number(bountyFulfilledRows[0]?.n ?? 0);
 
   const bountyRewardRows = await db
-    .select({ total: sql<number>`coalesce(sum(${bountyRequests.rewardAmount} * ${bountyRequests.quantity}), 0)` })
+    .select({
+      total: sql<number>`coalesce(sum(${bountyRequests.rewardAmount} * ${bountyRequests.quantity}), 0)`,
+    })
     .from(bountyRequests)
     .where(
       and(
         inArray(bountyRequests.hubId, effective),
-        inArray(bountyRequests.status, ["open", "pending_student_delivery", "under_review", "approved"]),
+        inArray(bountyRequests.status, [
+          "open",
+          "pending_student_delivery",
+          "under_review",
+          "approved",
+        ]),
       ),
     );
   const bountyTotalRewardValue = Number(bountyRewardRows[0]?.total ?? 0);
@@ -716,10 +698,7 @@ export async function buildHubOverviewPayload(
     hubScope: {
       all: !hubIdFilter && effective.length > 1,
       hubCount: effective.length,
-      label:
-        effective.length === 1
-          ? hubRows[0]?.name ?? "Hub"
-          : `${effective.length} hubs`,
+      label: effective.length === 1 ? (hubRows[0]?.name ?? "Hub") : `${effective.length} hubs`,
     },
     metrics: {
       totalBooks,

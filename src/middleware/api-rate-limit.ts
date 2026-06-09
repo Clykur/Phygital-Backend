@@ -51,19 +51,13 @@ function clientIp(req: Request): string {
 }
 
 function isAuthCredentialPath(method: string, pathname: string): boolean {
-  return (
-    method === "POST" &&
-    (pathname === "/api/auth/login" || pathname === "/api/auth/register")
-  );
+  return method === "POST" && (pathname === "/api/auth/login" || pathname === "/api/auth/register");
 }
 
 function isHealthPath(path: string | undefined): boolean {
   if (!path) return false;
   return (
-    path === "/healthz" ||
-    path.endsWith("/healthz") ||
-    path === "/ready" ||
-    path.endsWith("/ready")
+    path === "/healthz" || path.endsWith("/healthz") || path === "/ready" || path.endsWith("/ready")
   );
 }
 
@@ -90,11 +84,7 @@ function resetApprox(now: number, arr: number[], w: number): number {
  * - Anonymous: per IP (`API_RATE_LIMIT_IP_MAX`)
  * - Login/register only: stricter per IP (`API_RATE_LIMIT_AUTH_IP_MAX` / `API_RATE_LIMIT_AUTH_WINDOW_MS`)
  */
-export function apiRateLimitMiddleware(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): void {
+export function apiRateLimitMiddleware(req: Request, res: Response, next: NextFunction): void {
   if (req.method === "OPTIONS") {
     next();
     return;
@@ -148,10 +138,7 @@ export function apiRateLimitMiddleware(
 
   res.setHeader("RateLimit-Limit", String(max));
   res.setHeader("RateLimit-Remaining", String(Math.max(0, max - arr.length)));
-  res.setHeader(
-    "RateLimit-Reset",
-    String(resetApprox(now, arr, w)),
-  );
+  res.setHeader("RateLimit-Reset", String(resetApprox(now, arr, w)));
 
   next();
 }

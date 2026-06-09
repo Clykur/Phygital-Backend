@@ -2,10 +2,7 @@ import type { ErrorRequestHandler, RequestHandler } from "express";
 import { logger } from "../lib/logger";
 
 export const notFoundHandler: RequestHandler = (req, res) => {
-  res
-    .status(404)
-    .type("application/json")
-    .json({ error: "Not Found", path: req.path });
+  res.status(404).type("application/json").json({ error: "Not Found", path: req.path });
 };
 
 /** Walk `Error.cause` (Drizzle/pg often nest the real failure here). */
@@ -36,10 +33,7 @@ function errorChainText(err: unknown): { message: string; detail: string } {
   return { message: messages.join(" | "), detail: details.join("\n---cause---\n") };
 }
 
-function httpStatusFromError(
-  err: unknown,
-  chain: { message: string; detail: string },
-): number {
+function httpStatusFromError(err: unknown, chain: { message: string; detail: string }): number {
   // Common DB connectivity failures should not be reported as generic 500s.
   // These are transient infra/config issues (DB down, network, DNS, etc.).
   const { message: msg, detail: stackOrString } = chain;
@@ -55,8 +49,7 @@ function httpStatusFromError(
 
   if (typeof err === "object" && err !== null) {
     const o = err as { status?: unknown; statusCode?: unknown };
-    if (typeof o.status === "number" && o.status >= 400 && o.status < 600)
-      return o.status;
+    if (typeof o.status === "number" && o.status >= 400 && o.status < 600) return o.status;
     if (typeof o.statusCode === "number" && o.statusCode >= 400 && o.statusCode < 600)
       return o.statusCode;
   }
@@ -106,4 +99,3 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next) => {
   }
   res.status(code).type("application/json").json(body);
 };
-

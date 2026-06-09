@@ -35,8 +35,8 @@ export async function enrichBooksAcquiredFromHubNames<T extends HubNameFields>(
   const nameById = new Map(rows.map((h) => [h.id, h.name] as const));
   return list.map((r) => ({
     ...r,
-    acquiredFromHubName: r.acquiredFromHubId ? nameById.get(r.acquiredFromHubId) ?? null : null,
-    targetHubName: r.targetHubId ? nameById.get(r.targetHubId) ?? null : null,
-    originalHubName: r.originalHubId ? nameById.get(r.originalHubId) ?? null : null,
+    acquiredFromHubName: r.acquiredFromHubId ? (nameById.get(r.acquiredFromHubId) ?? null) : null,
+    targetHubName: r.targetHubId ? (nameById.get(r.targetHubId) ?? null) : null,
+    originalHubName: r.originalHubId ? (nameById.get(r.originalHubId) ?? null) : null,
   }));
 }

@@ -23,8 +23,8 @@ function profileBucket(): string {
 export function supabaseProfileStorageConfigured(): boolean {
   return Boolean(
     process.env["SUPABASE_URL"]?.trim() &&
-      process.env["SUPABASE_SERVICE_ROLE_KEY"]?.trim() &&
-      profileBucket(),
+    process.env["SUPABASE_SERVICE_ROLE_KEY"]?.trim() &&
+    profileBucket(),
   );
 }
 

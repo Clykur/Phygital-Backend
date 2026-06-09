@@ -1,10 +1,10 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const hubTsPath = path.join(repoRoot, 'src/routes/hub.ts');
-let code = fs.readFileSync(hubTsPath, 'utf8');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const hubTsPath = path.join(repoRoot, "src/routes/hub.ts");
+let code = fs.readFileSync(hubTsPath, "utf8");
 
 const regex = /router\.get\("\/students".*?export default router;/s;
 const newEndpoints = `router.get("/students", authMiddleware, requireAuth, async (req, res) => {

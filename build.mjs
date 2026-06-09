@@ -107,9 +107,7 @@ function buildOptions(distDir) {
     logLevel: "info",
     external,
     sourcemap: "linked",
-    plugins: [
-      esbuildPluginPino(),
-    ],
+    plugins: [esbuildPluginPino()],
   };
 }
 
@@ -147,7 +145,9 @@ async function main() {
   if (isWatch) {
     const ctx = await esbuild.context(opts);
     await ctx.watch();
-    console.log("[api-server build] watching — edit src/ to rebuild; node --watch will restart the API");
+    console.log(
+      "[api-server build] watching — edit src/ to rebuild; node --watch will restart the API",
+    );
   } else {
     await esbuild.build(opts);
   }

@@ -14,11 +14,13 @@ async function run() {
     );
     await pool.query(sql);
     console.log("Migration applied successfully!");
-    
+
     // Also explicitly grant EXECUTE just in case:
-    await pool.query("GRANT EXECUTE ON FUNCTION get_student_dashboard_data(UUID) TO service_role, authenticated, anon;");
+    await pool.query(
+      "GRANT EXECUTE ON FUNCTION get_student_dashboard_data(UUID) TO service_role, authenticated, anon;",
+    );
     console.log("Grant executed successfully!");
-  } catch(e) {
+  } catch (e) {
     console.error(e);
   } finally {
     pool.end();

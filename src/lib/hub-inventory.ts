@@ -105,7 +105,11 @@ export async function tryAssignCopyToWaitingRequests(
 
   await tx.execute(sql`SELECT id FROM book_requests WHERE id = ${match.id}::uuid FOR UPDATE`);
 
-  const [rowAfter] = await tx.select().from(bookRequests).where(eq(bookRequests.id, match.id)).limit(1);
+  const [rowAfter] = await tx
+    .select()
+    .from(bookRequests)
+    .where(eq(bookRequests.id, match.id))
+    .limit(1);
   if (!rowAfter || rowAfter.status !== "pending") return null;
   if (normalizeBookTitle(String(rowAfter.bookTitle ?? "")) !== norm) return null;
 
@@ -348,18 +352,15 @@ export async function sweepDeskWaitingAssignments(hubScope: string[]): Promise<{
   const rows = await db
     .select()
     .from(bookRequests)
-    .where(
-      and(
-        inArray(bookRequests.hubId, hubScope),
-        eq(bookRequests.status, "pending"),
-      ),
-    )
+    .where(and(inArray(bookRequests.hubId, hubScope), eq(bookRequests.status, "pending")))
     .orderBy(asc(bookRequests.createdAt));
 
   let linked = 0;
   for (const r of rows) {
+    const hubId = r.hubId;
+    if (!hubId) continue;
     const out = await db.transaction(async (tx) => {
-      return tryAssignAvailableCopiesForDeskTitle(tx, r.hubId, r.bookTitle, {
+      return tryAssignAvailableCopiesForDeskTitle(tx, hubId, r.bookTitle, {
         preferRequestId: r.id,
         preferOnly: true,
       });

@@ -103,7 +103,10 @@ async function deliverRow(row: NotificationDeliveryRow): Promise<boolean> {
  * Process pending rows and failed rows eligible for retry (exponential backoff from updatedAt).
  * Swallows transient pool/connection errors so a busy DB does not spam logs every tick.
  */
-export async function processNotificationQueueWorker(): Promise<{ processed: number; sent: number }> {
+export async function processNotificationQueueWorker(): Promise<{
+  processed: number;
+  sent: number;
+}> {
   try {
     return await processNotificationQueueWorkerInner();
   } catch (e) {

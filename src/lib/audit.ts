@@ -1,5 +1,5 @@
 import { db } from "@workspace/db";
-import { auditLog } from "@workspace/db/schema";
+import { auditLogs } from "@workspace/db/schema";
 import { logger } from "./logger";
 
 const denialBuckets = new Map<string, number[]>();

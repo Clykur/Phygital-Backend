@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { and, count, desc, eq, inArray, isNull, or, sql, type InferSelectModel } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@workspace/db";
-import { bookRequestHubReassignments, bookRequests, books, hubs, users } from "@workspace/db/schema";
+import { bookRequestHubReassignments, bookRequests, books, users } from "@workspace/db/schema";
 import { checkoutDueAt } from "../lib/books-lifecycle";
 import { ACTIONS } from "../lib/rbac/actions";
 import { authorize, canManageBookRequest } from "../lib/rbac/authorize";
@@ -10,7 +10,6 @@ import {
   BOOK_REQUEST_ACTIVE_STATUSES,
   canClaimBookRequest,
   canConfirmBookRequestDelivery,
-  isTerminalBookRequest,
   isValidUserCancelBookRequest,
 } from "../lib/state-machines";
 import { expireAllStaleBookRequests } from "../lib/expire-book-requests";
@@ -131,7 +130,10 @@ router.post("/", authMiddleware, requireAuth, async (req, res) => {
     const bookErr = parsed.error.flatten().fieldErrors.bookTitle?.[0];
     const notesErr = parsed.error.flatten().fieldErrors.notes?.[0];
     res.status(400).json({
-      error: bookErr ?? notesErr ?? "Invalid body. bookTitle is required; author, isbn, and notes are optional.",
+      error:
+        bookErr ??
+        notesErr ??
+        "Invalid body. bookTitle is required; author, isbn, and notes are optional.",
     });
     return;
   }
@@ -161,7 +163,7 @@ router.post("/", authMiddleware, requireAuth, async (req, res) => {
   const bookTitle = parsed.data.bookTitle;
   const author = normalizeOptionalText(parsed.data.author);
   const isbn = normalizeOptionalText(parsed.data.isbn);
-  const notes = normalizeOptionalText(parsed.data.notes);
+  void normalizeOptionalText(parsed.data.notes);
 
   const [{ activeCount }] = await db
     .select({ activeCount: count() })
@@ -395,14 +397,22 @@ router.get("/hub", authMiddleware, requireAuth, async (req, res) => {
 
   const withMeta = await withReassignMeta(rows);
   const userIds = [...new Set(withMeta.map((r) => r.userId))];
-  const copyIds = [...new Set(withMeta.map((r) => r.assignedCopyId).filter((v): v is string => !!v))];
+  const copyIds = [
+    ...new Set(withMeta.map((r) => r.assignedCopyId).filter((v): v is string => !!v)),
+  ];
   const userRows =
     userIds.length > 0
-      ? await db.select({ id: users.id, publicId: users.publicId }).from(users).where(inArray(users.id, userIds))
+      ? await db
+          .select({ id: users.id, publicId: users.publicId })
+          .from(users)
+          .where(inArray(users.id, userIds))
       : [];
   const copyRows =
     copyIds.length > 0
-      ? await db.select({ id: books.id, refId: books.refId }).from(books).where(inArray(books.id, copyIds))
+      ? await db
+          .select({ id: books.id, refId: books.refId })
+          .from(books)
+          .where(inArray(books.id, copyIds))
       : [];
   const userPublicIdById = new Map(userRows.map((u) => [u.id, u.publicId ?? null]));
   const copyRefById = new Map(copyRows.map((c) => [c.id, c.refId ?? null]));
@@ -507,12 +517,22 @@ router.post("/:id/claim", authMiddleware, requireAuth, async (req, res) => {
         });
       }
 
-      const [afterAssign] = await tx.select().from(bookRequests).where(eq(bookRequests.id, id)).limit(1);
-      if (afterAssign && (afterAssign.status === "pending" || afterAssign.status === "lease_requested")) {
+      const [afterAssign] = await tx
+        .select()
+        .from(bookRequests)
+        .where(eq(bookRequests.id, id))
+        .limit(1);
+      if (
+        afterAssign &&
+        (afterAssign.status === "pending" || afterAssign.status === "lease_requested")
+      ) {
         const [u] = await tx
           .update(bookRequests)
           .set({
-            status: afterAssign.status === "lease_requested" ? "lease_approved" : "available_for_collection",
+            status:
+              afterAssign.status === "lease_requested"
+                ? "lease_approved"
+                : "available_for_collection",
             readyAt: now,
             updatedAt: now,
           })
@@ -532,7 +552,6 @@ router.post("/:id/claim", authMiddleware, requireAuth, async (req, res) => {
   }
 
   const hubLabel = await hubNameById(parsed.data.hubId);
-  const titleLabel = row.bookTitle?.trim() || "your requested book";
   await notifyUser({
     userId: row.userId,
     kind: "book_request_available",

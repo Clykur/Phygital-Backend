@@ -1,5 +1,15 @@
 import { Router, type IRouter } from "express";
-import { and, count, eq, getTableColumns, ilike, inArray, isNotNull, or, sql, type InferSelectModel } from "drizzle-orm";
+import {
+  and,
+  count,
+  eq,
+  getTableColumns,
+  inArray,
+  isNotNull,
+  or,
+  sql,
+  type InferSelectModel,
+} from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@workspace/db";
 import {
@@ -45,91 +55,81 @@ import { enrichBooksAcquiredFromHubNames } from "../lib/book-acquired-from";
 import { hubInventoryBooksOrderBy } from "../lib/hub-inventory-books-order";
 import { hubP2pPipelineListingsOrderBy } from "../lib/hub-p2p-pipeline-listings-order";
 import { nextBookRefId } from "../lib/public-ids";
-import { success } from "zod/v4";
-
 const router: IRouter = Router();
 
 const p2pStatusUpdateSchema = z.object({
   status: z.enum(["approved", "rejected"]),
 });
 
-router.put(
-  "/p2p-submissions/:listingId/status",
-  authMiddleware,
-  requireAuth,
-  async (req, res) => {
-    const auth = req.auth!;
-    const listingId = pathParam(req.params["listingId"]);
-    if (!listingId) {
-      return res.status(400).json({ error: "Invalid listing ID" });
-    }
-    const parsed = p2pStatusUpdateSchema.safeParse(req.body);
+router.put("/p2p-submissions/:listingId/status", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth!;
+  const listingId = pathParam(req.params["listingId"]);
+  if (!listingId) {
+    return res.status(400).json({ error: "Invalid listing ID" });
+  }
+  const parsed = p2pStatusUpdateSchema.safeParse(req.body);
 
-    if (!parsed.success) {
-      return res.status(400).json({ error: "Invalid status" });
-    }
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Invalid status" });
+  }
 
-    const { status } = parsed.data;
+  const { status } = parsed.data;
 
-    try {
-      await db.transaction(async (tx) => {
-        const listing = await tx.query.p2pListings.findFirst({
-          where: eq(p2pListings.id, listingId),
-        });
-
-        if (!listing) {
-          throw new Error("NOT_FOUND");
-        }
-
-        if (listing.status !== "pending_dropoff") {
-          throw new Error("BAD_STATUS");
-        }
-
-        if (!listing.dropoffHubId) {
-          throw new Error("NO_HUB_ID");
-        }
-
-        if (!auth.hubStaffHubIds.includes(listing.dropoffHubId!)) {
-          throw new Error("FORBIDDEN");
-        }
-
-        if (status === "approved") {
-        const [newBook] = await tx
-            .insert(books)
-            .values({
-              refId: await nextBookRefId(),
-              title: listing.bookTitle,
-              hubId: listing.dropoffHubId,
-              coverImageUrl: listing.coverImageUrl,
-              source: "p2p",
-              status: "available",
-              buyPrice: listing.price,
-              borrowPrice: listing.borrowPrice,
-              ownerId: listing.ownerId,
-              listingId: listing.id,
-            })
-            .returning();
-
-          await tx
-            .update(p2pListings)
-            .set({ status: "approved" })
-            .where(eq(p2pListings.id, listingId));
-        } else {
-          await tx
-            .update(p2pListings)
-            .set({ status })
-            .where(eq(p2pListings.id, listingId));
-        }
+  try {
+    await db.transaction(async (tx) => {
+      const listing = await tx.query.p2pListings.findFirst({
+        where: eq(p2pListings.id, listingId),
       });
 
-      res.json({ success: true });
-      return res.json({ success: true });
-    } catch (error: any) {
-      logger.error(error, "Failed to update P2P submission status");
-      return res.status(500).json({ error: "Something went wrong, please try again later." });
-    }
-  },
-);
+      if (!listing) {
+        throw new Error("NOT_FOUND");
+      }
+
+      if (listing.status !== "pending_dropoff") {
+        throw new Error("BAD_STATUS");
+      }
+
+      if (!listing.dropoffHubId) {
+        throw new Error("NO_HUB_ID");
+      }
+
+      if (!auth.hubStaffHubIds.includes(listing.dropoffHubId!)) {
+        throw new Error("FORBIDDEN");
+      }
+
+      if (status === "approved") {
+        await tx
+          .insert(books)
+          .values({
+            refId: await nextBookRefId(),
+            title: listing.bookTitle,
+            hubId: listing.dropoffHubId,
+            coverImageUrl: listing.coverImageUrl,
+            source: "p2p",
+            status: "available",
+            buyPrice: listing.price,
+            borrowPrice: listing.borrowPrice,
+            ownerId: listing.ownerId,
+            listingId: listing.id,
+          })
+          .returning();
+
+        await tx
+          .update(p2pListings)
+          .set({ status: "approved" })
+          .where(eq(p2pListings.id, listingId));
+      } else {
+        await tx.update(p2pListings).set({ status }).where(eq(p2pListings.id, listingId));
+      }
+    });
+
+    res.json({ success: true });
+    return res.json({ success: true });
+  } catch (error: any) {
+    logger.error(error, "Failed to update P2P submission status");
+    return res.status(500).json({ error: "Something went wrong, please try again later." });
+  }
+});
 
 function escapeIlikePattern(s: string): string {
   return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
@@ -373,7 +373,8 @@ router.post("/books/:bookId/scan", authMiddleware, requireAuth, async (req, res)
     }
     if (err.message === "SCAN_NO_MANUAL_RESERVED") {
       res.status(409).json({
-        error: "Reserved copies are assigned only by the request queue. Use inventory tools to release to available first.",
+        error:
+          "Reserved copies are assigned only by the request queue. Use inventory tools to release to available first.",
       });
       return;
     }
@@ -385,12 +386,15 @@ router.post("/books/:bookId/scan", authMiddleware, requireAuth, async (req, res)
     }
     if (err.message === "SCAN_P2P_SOLD") {
       res.status(409).json({
-        error: "Peer consignment copies cannot be marked sold via desk scan. Complete sale through the peer listing or acquire hub ownership first.",
+        error:
+          "Peer consignment copies cannot be marked sold via desk scan. Complete sale through the peer listing or acquire hub ownership first.",
       });
       return;
     }
     if (err.message === "SCAN_SOLD_IMMUTABLE") {
-      res.status(409).json({ error: "Sold copies are immutable and cannot move back to shelf states." });
+      res
+        .status(409)
+        .json({ error: "Sold copies are immutable and cannot move back to shelf states." });
       return;
     }
     if (err.message === "SCAN_CHECKED_OUT_NO_SALE") {
@@ -398,12 +402,15 @@ router.post("/books/:bookId/scan", authMiddleware, requireAuth, async (req, res)
       return;
     }
     if (err.message === "SCAN_RESERVED_NO_CHECKOUT") {
-      res.status(409).json({ error: "Reserved copies cannot be checked out manually. Record request pickup instead." });
+      res.status(409).json({
+        error: "Reserved copies cannot be checked out manually. Record request pickup instead.",
+      });
       return;
     }
     if (err.message === "SCAN_TRANSFER") {
       res.status(409).json({
-        error: "This copy is in an inter-hub transfer. Use transfer actions (in transit / received) instead of desk scan.",
+        error:
+          "This copy is in an inter-hub transfer. Use transfer actions (in transit / received) instead of desk scan.",
       });
       return;
     }
@@ -424,321 +431,344 @@ router.post("/books/:bookId/scan", authMiddleware, requireAuth, async (req, res)
 });
 
 /** Convert peer consignment copy to hub-owned inventory (clears peer owner; closes open listing). */
-router.post("/books/:bookId/acquire-peer-ownership", authMiddleware, requireAuth, async (req, res) => {
-  const auth = req.auth!;
-  const bookId = pathParam(req.params["bookId"]);
-  if (!bookId) {
-    res.status(400).json({ error: "Missing book" });
-    return;
-  }
-  try {
-    const hubId = await db.transaction(async (tx) => {
-      await tx.execute(sql`SELECT id FROM books WHERE id = ${bookId}::uuid FOR UPDATE`);
-      const [book] = await tx.select().from(books).where(eq(books.id, bookId)).limit(1);
-      if (!book) {
-        const err = new Error("NOT_FOUND");
-        (err as Error & { status: number }).status = 404;
-        throw err;
-      }
-      requireHubStaff(auth, book.hubId);
-      if (
-        !authorize(auth, ACTIONS.MANAGE_INVENTORY, {
-          type: "book",
-          hubId: book.hubId,
-          bookId: book.id,
-        })
-      ) {
-        const err = new Error("FORBIDDEN");
-        (err as Error & { status: number }).status = 403;
-        throw err;
-      }
-      await requireActiveHub(tx as DbClient, book.hubId);
-      if (book.source !== "p2p") {
-        const err = new Error("NOT_P2P");
-        (err as Error & { status: number }).status = 409;
-        throw err;
-      }
-      if (book.status !== "available") {
-        const err = new Error("NOT_AVAILABLE");
-        (err as Error & { status: number }).status = 409;
-        throw err;
-      }
-
-      const listingId = book.listingId;
-      if (listingId) {
-        const [listing] = await tx
-          .select()
-          .from(p2pListings)
-          .where(eq(p2pListings.id, listingId))
-          .limit(1);
-        if (listing && (listing.status === "available" || listing.status === "pending_dropoff")) {
-          await tx
-            .update(p2pListings)
-            .set({ status: "expired", updatedAt: new Date() })
-            .where(eq(p2pListings.id, listingId));
-          await notifyUser({
-            userId: listing.ownerId,
-            kind: "p2p_hub_acquired_copy",
-            body: `The hub acquired the physical copy for “${listing.bookTitle}” into its own inventory. This listing was closed.`,
-          });
+router.post(
+  "/books/:bookId/acquire-peer-ownership",
+  authMiddleware,
+  requireAuth,
+  async (req, res) => {
+    const auth = req.auth!;
+    const bookId = pathParam(req.params["bookId"]);
+    if (!bookId) {
+      res.status(400).json({ error: "Missing book" });
+      return;
+    }
+    try {
+      const hubId = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM books WHERE id = ${bookId}::uuid FOR UPDATE`);
+        const [book] = await tx.select().from(books).where(eq(books.id, bookId)).limit(1);
+        if (!book) {
+          const err = new Error("NOT_FOUND");
+          (err as Error & { status: number }).status = 404;
+          throw err;
         }
-      }
+        requireHubStaff(auth, book.hubId);
+        if (
+          !authorize(auth, ACTIONS.MANAGE_INVENTORY, {
+            type: "book",
+            hubId: book.hubId,
+            bookId: book.id,
+          })
+        ) {
+          const err = new Error("FORBIDDEN");
+          (err as Error & { status: number }).status = 403;
+          throw err;
+        }
+        await requireActiveHub(tx as DbClient, book.hubId);
+        if (book.source !== "p2p") {
+          const err = new Error("NOT_P2P");
+          (err as Error & { status: number }).status = 409;
+          throw err;
+        }
+        if (book.status !== "available") {
+          const err = new Error("NOT_AVAILABLE");
+          (err as Error & { status: number }).status = 409;
+          throw err;
+        }
 
-      await tx
-        .update(books)
-        .set({
-          source: "hub_inventory",
-          ownerId: null,
-          listingId: null,
-          updatedAt: new Date(),
-        })
-        .where(eq(books.id, bookId));
+        const listingId = book.listingId;
+        if (listingId) {
+          const [listing] = await tx
+            .select()
+            .from(p2pListings)
+            .where(eq(p2pListings.id, listingId))
+            .limit(1);
+          if (listing && (listing.status === "available" || listing.status === "pending_dropoff")) {
+            await tx
+              .update(p2pListings)
+              .set({ status: "expired", updatedAt: new Date() })
+              .where(eq(p2pListings.id, listingId));
+            await notifyUser({
+              userId: listing.ownerId,
+              kind: "p2p_hub_acquired_copy",
+              body: `The hub acquired the physical copy for “${listing.bookTitle}” into its own inventory. This listing was closed.`,
+            });
+          }
+        }
 
-      return book.hubId;
-    });
+        await tx
+          .update(books)
+          .set({
+            source: "hub_inventory",
+            ownerId: null,
+            listingId: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(books.id, bookId));
 
-    await logAudit({
-      userId: auth.userId,
-      hubId,
-      action: ACTIONS.MANAGE_INVENTORY,
-      resourceType: "book",
-      resourceId: bookId,
-      meta: { acquirePeerToHub: true },
-    });
-    res.json({ ok: true });
-  } catch (e) {
-    const err = e as Error & { status?: number };
-    if (err.message === "NOT_FOUND") {
-      res.status(404).json({ error: "Not found" });
-      return;
-    }
-    if (err.message === "HUB_FORBIDDEN" || err.message === "FORBIDDEN") {
-      res.status(403).json({ error: "Forbidden" });
-      return;
-    }
-    if (err.message === "HUB_INACTIVE") {
-      res.status(403).json({ error: "This hub is inactive." });
-      return;
-    }
-    if (err.message === "NOT_P2P") {
-      res.status(409).json({ error: "Only peer consignment copies can be converted to hub inventory." });
-      return;
-    }
-    if (err.message === "NOT_AVAILABLE") {
-      res.status(409).json({
-        error: "Only available on-shelf copies can be acquired. Return or resolve loans first.",
+        return book.hubId;
       });
+
+      await logAudit({
+        userId: auth.userId,
+        hubId,
+        action: ACTIONS.MANAGE_INVENTORY,
+        resourceType: "book",
+        resourceId: bookId,
+        meta: { acquirePeerToHub: true },
+      });
+      res.json({ ok: true });
+    } catch (e) {
+      const err = e as Error & { status?: number };
+      if (err.message === "NOT_FOUND") {
+        res.status(404).json({ error: "Not found" });
+        return;
+      }
+      if (err.message === "HUB_FORBIDDEN" || err.message === "FORBIDDEN") {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+      if (err.message === "HUB_INACTIVE") {
+        res.status(403).json({ error: "This hub is inactive." });
+        return;
+      }
+      if (err.message === "NOT_P2P") {
+        res
+          .status(409)
+          .json({ error: "Only peer consignment copies can be converted to hub inventory." });
+        return;
+      }
+      if (err.message === "NOT_AVAILABLE") {
+        res.status(409).json({
+          error: "Only available on-shelf copies can be acquired. Return or resolve loans first.",
+        });
+        return;
+      }
+      logger.error(e, "Failed to acquire peer ownership");
+      res.status(500).json({ error: "Something went wrong, please try again later." });
       return;
     }
-    logger.error(e, "Failed to acquire peer ownership");
-    res.status(500).json({ error: "Something went wrong, please try again later." });
-    return;
-  }
-});
+  },
+);
 
 /** Source hub: physical copy is being shipped to the acquiring hub. */
-router.post("/books/:bookId/transfer/mark-in-transit", authMiddleware, requireAuth, async (req, res) => {
-  const auth = req.auth!;
-  const bookId = pathParam(req.params["bookId"]);
-  if (!bookId) {
-    res.status(400).json({ error: "Missing book" });
-    return;
-  }
-  let auditHubId: string | null = null;
-  try {
-    await db.transaction(async (tx) => {
-      await tx.execute(sql`SELECT id FROM books WHERE id = ${bookId}::uuid FOR UPDATE`);
-      const [book] = await tx.select().from(books).where(eq(books.id, bookId)).limit(1);
-      if (!book) {
-        const err = new Error("NOT_FOUND");
-        (err as Error & { status: number }).status = 404;
-        throw err;
+router.post(
+  "/books/:bookId/transfer/mark-in-transit",
+  authMiddleware,
+  requireAuth,
+  async (req, res) => {
+    const auth = req.auth!;
+    const bookId = pathParam(req.params["bookId"]);
+    if (!bookId) {
+      res.status(400).json({ error: "Missing book" });
+      return;
+    }
+    let auditHubId: string | null = null;
+    try {
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM books WHERE id = ${bookId}::uuid FOR UPDATE`);
+        const [book] = await tx.select().from(books).where(eq(books.id, bookId)).limit(1);
+        if (!book) {
+          const err = new Error("NOT_FOUND");
+          (err as Error & { status: number }).status = 404;
+          throw err;
+        }
+        auditHubId = book.hubId;
+        if (book.status !== "transfer_pending") {
+          const err = new Error("BAD_TRANSFER_STATE");
+          (err as Error & { status: number }).status = 409;
+          throw err;
+        }
+        if (!book.targetHubId || book.hubId !== book.originalHubId) {
+          const err = new Error("TRANSFER_MISMATCH");
+          (err as Error & { status: number }).status = 409;
+          throw err;
+        }
+        requireHubStaff(auth, book.hubId);
+        if (
+          !authorize(auth, ACTIONS.MANAGE_INVENTORY, {
+            type: "book",
+            hubId: book.hubId,
+            bookId: book.id,
+          })
+        ) {
+          const err = new Error("FORBIDDEN");
+          (err as Error & { status: number }).status = 403;
+          throw err;
+        }
+        await requireActiveHub(tx as DbClient, book.hubId);
+        const now = new Date();
+        const [upd] = await tx
+          .update(books)
+          .set({ status: "in_transit", updatedAt: now })
+          .where(and(eq(books.id, bookId), eq(books.status, "transfer_pending")))
+          .returning({ id: books.id });
+        if (!upd) {
+          const err = new Error("RACE");
+          (err as Error & { status: number }).status = 409;
+          throw err;
+        }
+      });
+      await logAudit({
+        userId: auth.userId,
+        hubId: auditHubId,
+        action: "HUB_BOOK_TRANSFER_IN_TRANSIT",
+        resourceType: "book",
+        resourceId: bookId,
+        meta: {},
+      });
+      res.json({ ok: true });
+    } catch (e) {
+      const err = e as Error & { status?: number };
+      if (err.message === "NOT_FOUND") {
+        res.status(404).json({ error: "Not found" });
+        return;
       }
-      auditHubId = book.hubId;
-      if (book.status !== "transfer_pending") {
-        const err = new Error("BAD_TRANSFER_STATE");
-        (err as Error & { status: number }).status = 409;
-        throw err;
+      if (err.message === "FORBIDDEN" || err.message === "HUB_FORBIDDEN") {
+        res.status(403).json({ error: "Forbidden" });
+        return;
       }
-      if (!book.targetHubId || book.hubId !== book.originalHubId) {
-        const err = new Error("TRANSFER_MISMATCH");
-        (err as Error & { status: number }).status = 409;
-        throw err;
+      if (err.message === "HUB_INACTIVE") {
+        res.status(403).json({ error: "This hub is inactive." });
+        return;
       }
-      requireHubStaff(auth, book.hubId);
-      if (
-        !authorize(auth, ACTIONS.MANAGE_INVENTORY, {
-          type: "book",
-          hubId: book.hubId,
-          bookId: book.id,
-        })
-      ) {
-        const err = new Error("FORBIDDEN");
-        (err as Error & { status: number }).status = 403;
-        throw err;
+      if (err.message === "BAD_TRANSFER_STATE") {
+        res.status(409).json({
+          error: "Only copies awaiting shipment (transfer pending) can be marked in transit.",
+        });
+        return;
       }
-      await requireActiveHub(tx as DbClient, book.hubId);
-      const now = new Date();
-      const [upd] = await tx
-        .update(books)
-        .set({ status: "in_transit", updatedAt: now })
-        .where(and(eq(books.id, bookId), eq(books.status, "transfer_pending")))
-        .returning({ id: books.id });
-      if (!upd) {
-        const err = new Error("RACE");
-        (err as Error & { status: number }).status = 409;
-        throw err;
+      if (err.message === "TRANSFER_MISMATCH") {
+        res.status(409).json({ error: "Transfer metadata is inconsistent; contact support." });
+        return;
       }
-    });
-    await logAudit({
-      userId: auth.userId,
-      hubId: auditHubId,
-      action: "HUB_BOOK_TRANSFER_IN_TRANSIT",
-      resourceType: "book",
-      resourceId: bookId,
-      meta: {},
-    });
-    res.json({ ok: true });
-  } catch (e) {
-    const err = e as Error & { status?: number };
-    if (err.message === "NOT_FOUND") {
-      res.status(404).json({ error: "Not found" });
-      return;
+      logger.error(e, "Failed to mark book in transit");
+      res.status(500).json({ error: "Something went wrong, please try again later." });
+      if (err.message === "RACE") {
+        res
+          .status(409)
+          .json({ error: "Another update just changed this copy. Refresh and try again." });
+        return;
+      }
+      throw e;
     }
-    if (err.message === "FORBIDDEN" || err.message === "HUB_FORBIDDEN") {
-      res.status(403).json({ error: "Forbidden" });
-      return;
-    }
-    if (err.message === "HUB_INACTIVE") {
-      res.status(403).json({ error: "This hub is inactive." });
-      return;
-    }
-    if (err.message === "BAD_TRANSFER_STATE") {
-      res.status(409).json({ error: "Only copies awaiting shipment (transfer pending) can be marked in transit." });
-      return;
-    }
-    if (err.message === "TRANSFER_MISMATCH") {
-      res.status(409).json({ error: "Transfer metadata is inconsistent; contact support." });
-      return;
-    }
-    logger.error(e, "Failed to mark book in transit");
-    res.status(500).json({ error: "Something went wrong, please try again later." });
-    if (err.message === "RACE") {
-      res.status(409).json({ error: "Another update just changed this copy. Refresh and try again." });
-      return;
-    }
-    throw e;
-  }
-});
+  },
+);
 
 /** Destination hub: copy arrived — move shelf ownership to this hub and make it available. */
-router.post("/books/:bookId/transfer/mark-received", authMiddleware, requireAuth, async (req, res) => {
-  const auth = req.auth!;
-  const bookId = pathParam(req.params["bookId"]);
-  if (!bookId) {
-    res.status(400).json({ error: "Missing book" });
-    return;
-  }
-  let auditHubId: string | null = null;
-  try {
-    await db.transaction(async (tx) => {
-      await tx.execute(sql`SELECT id FROM books WHERE id = ${bookId}::uuid FOR UPDATE`);
-      const [book] = await tx.select().from(books).where(eq(books.id, bookId)).limit(1);
-      if (!book) {
-        const err = new Error("NOT_FOUND");
-        (err as Error & { status: number }).status = 404;
-        throw err;
-      }
-      if (book.status !== "in_transit") {
-        const err = new Error("BAD_TRANSFER_STATE");
-        (err as Error & { status: number }).status = 409;
-        throw err;
-      }
-      if (!book.targetHubId || !book.originalHubId) {
-        const err = new Error("TRANSFER_MISMATCH");
-        (err as Error & { status: number }).status = 409;
-        throw err;
-      }
-      const destHubId = book.targetHubId;
-      const titleForAssign = book.title;
-      auditHubId = destHubId;
-      requireHubStaff(auth, destHubId);
-      if (
-        !authorize(auth, ACTIONS.MANAGE_INVENTORY, {
-          type: "book",
+router.post(
+  "/books/:bookId/transfer/mark-received",
+  authMiddleware,
+  requireAuth,
+  async (req, res) => {
+    const auth = req.auth!;
+    const bookId = pathParam(req.params["bookId"]);
+    if (!bookId) {
+      res.status(400).json({ error: "Missing book" });
+      return;
+    }
+    let auditHubId: string | null = null;
+    try {
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM books WHERE id = ${bookId}::uuid FOR UPDATE`);
+        const [book] = await tx.select().from(books).where(eq(books.id, bookId)).limit(1);
+        if (!book) {
+          const err = new Error("NOT_FOUND");
+          (err as Error & { status: number }).status = 404;
+          throw err;
+        }
+        if (book.status !== "in_transit") {
+          const err = new Error("BAD_TRANSFER_STATE");
+          (err as Error & { status: number }).status = 409;
+          throw err;
+        }
+        if (!book.targetHubId || !book.originalHubId) {
+          const err = new Error("TRANSFER_MISMATCH");
+          (err as Error & { status: number }).status = 409;
+          throw err;
+        }
+        const destHubId = book.targetHubId;
+        const titleForAssign = book.title;
+        auditHubId = destHubId;
+        requireHubStaff(auth, destHubId);
+        if (
+          !authorize(auth, ACTIONS.MANAGE_INVENTORY, {
+            type: "book",
+            hubId: destHubId,
+            bookId: book.id,
+          })
+        ) {
+          const err = new Error("FORBIDDEN");
+          (err as Error & { status: number }).status = 403;
+          throw err;
+        }
+        await requireActiveHub(tx as DbClient, destHubId);
+        const now = new Date();
+        const [upd] = await tx
+          .update(books)
+          .set({
+            hubId: destHubId,
+            status: "available",
+            acquiredFromHubId: book.originalHubId,
+            targetHubId: null,
+            originalHubId: null,
+            updatedAt: now,
+          })
+          .where(and(eq(books.id, bookId), eq(books.status, "in_transit")))
+          .returning({ id: books.id });
+        if (!upd) {
+          const err = new Error("RACE");
+          (err as Error & { status: number }).status = 409;
+          throw err;
+        }
+        await tryAssignCopyToWaitingRequests(tx as DbClient, {
+          id: bookId,
           hubId: destHubId,
-          bookId: book.id,
-        })
-      ) {
-        const err = new Error("FORBIDDEN");
-        (err as Error & { status: number }).status = 403;
-        throw err;
-      }
-      await requireActiveHub(tx as DbClient, destHubId);
-      const now = new Date();
-      const [upd] = await tx
-        .update(books)
-        .set({
-          hubId: destHubId,
-          status: "available",
-          acquiredFromHubId: book.originalHubId,
-          targetHubId: null,
-          originalHubId: null,
-          updatedAt: now,
-        })
-        .where(and(eq(books.id, bookId), eq(books.status, "in_transit")))
-        .returning({ id: books.id });
-      if (!upd) {
-        const err = new Error("RACE");
-        (err as Error & { status: number }).status = 409;
-        throw err;
-      }
-      await tryAssignCopyToWaitingRequests(tx as DbClient, {
-        id: bookId,
-        hubId: destHubId,
-        title: titleForAssign,
+          title: titleForAssign,
+        });
       });
-    });
-    await logAudit({
-      userId: auth.userId,
-      hubId: auditHubId,
-      action: "HUB_BOOK_TRANSFER_RECEIVED",
-      resourceType: "book",
-      resourceId: bookId,
-      meta: {},
-    });
-    res.json({ ok: true });
-  } catch (e) {
-    const err = e as Error & { status?: number };
-    if (err.message === "NOT_FOUND") {
-      res.status(404).json({ error: "Not found" });
-      return;
-    }
-    if (err.message === "FORBIDDEN" || err.message === "HUB_FORBIDDEN") {
-      res.status(403).json({ error: "Forbidden" });
-      return;
-    }
-    if (err.message === "HUB_INACTIVE") {
-      res.status(403).json({ error: "This hub is inactive." });
-      return;
-    }
-    if (err.message === "BAD_TRANSFER_STATE") {
-      res.status(409).json({
-        error: "Only copies marked in transit can be received at the destination hub.",
+      await logAudit({
+        userId: auth.userId,
+        hubId: auditHubId,
+        action: "HUB_BOOK_TRANSFER_RECEIVED",
+        resourceType: "book",
+        resourceId: bookId,
+        meta: {},
       });
-      return;
+      res.json({ ok: true });
+    } catch (e) {
+      const err = e as Error & { status?: number };
+      if (err.message === "NOT_FOUND") {
+        res.status(404).json({ error: "Not found" });
+        return;
+      }
+      if (err.message === "FORBIDDEN" || err.message === "HUB_FORBIDDEN") {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+      if (err.message === "HUB_INACTIVE") {
+        res.status(403).json({ error: "This hub is inactive." });
+        return;
+      }
+      if (err.message === "BAD_TRANSFER_STATE") {
+        res.status(409).json({
+          error: "Only copies marked in transit can be received at the destination hub.",
+        });
+        return;
+      }
+      if (err.message === "TRANSFER_MISMATCH") {
+        res.status(409).json({ error: "Transfer metadata is inconsistent; contact support." });
+        return;
+      }
+      if (err.message === "RACE") {
+        res
+          .status(409)
+          .json({ error: "Another update just changed this copy. Refresh and try again." });
+        return;
+      }
+      throw e;
     }
-    if (err.message === "TRANSFER_MISMATCH") {
-      res.status(409).json({ error: "Transfer metadata is inconsistent; contact support." });
-      return;
-    }
-    if (err.message === "RACE") {
-      res.status(409).json({ error: "Another update just changed this copy. Refresh and try again." });
-      return;
-    }
-    throw e;
-  }
-});
+  },
+);
 
 const sweepDeskSchema = z.object({ hubId: z.string().uuid().optional() });
 
@@ -749,7 +779,9 @@ router.post("/desk/sweep-assignments", authMiddleware, requireAuth, async (req, 
     res.status(403).json({ error: "Hub staff only." });
     return;
   }
-  const parsed = sweepDeskSchema.safeParse(req.body && typeof req.body === "object" ? req.body : {});
+  const parsed = sweepDeskSchema.safeParse(
+    req.body && typeof req.body === "object" ? req.body : {},
+  );
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid body." });
     return;
@@ -769,8 +801,7 @@ router.get("/books", authMiddleware, requireAuth, async (req, res) => {
   }
   await reconcileOverdueBooks();
 
-  const hubIdParam =
-    typeof req.query["hubId"] === "string" ? req.query["hubId"] : undefined;
+  const hubIdParam = typeof req.query["hubId"] === "string" ? req.query["hubId"] : undefined;
   if (hubIdParam && !auth.hubStaffHubIds.includes(hubIdParam)) {
     res.status(403).json({ error: "Forbidden" });
     return;
@@ -778,8 +809,7 @@ router.get("/books", authMiddleware, requireAuth, async (req, res) => {
 
   const isSuper = auth.baseRole === "super_admin";
   /** Every physical copy in `books` (all hubs) — only super admin may request this; ignored when `hubId` is set. */
-  const platformWide =
-    isSuper && !hubIdParam && String(req.query["scope"] ?? "") === "platform";
+  const platformWide = isSuper && !hubIdParam && String(req.query["scope"] ?? "") === "platform";
 
   const sourceRaw = typeof req.query["source"] === "string" ? req.query["source"] : "all";
   const sourceFilter =
@@ -798,9 +828,7 @@ router.get("/books", authMiddleware, requireAuth, async (req, res) => {
     "in_transit",
   ] as const;
   const statusFilter =
-    statusRaw && (allowedStatuses as readonly string[]).includes(statusRaw)
-      ? statusRaw
-      : undefined;
+    statusRaw && (allowedStatuses as readonly string[]).includes(statusRaw) ? statusRaw : undefined;
 
   const qRaw = typeof req.query["q"] === "string" ? req.query["q"].trim() : "";
 
@@ -812,9 +840,7 @@ router.get("/books", authMiddleware, requireAuth, async (req, res) => {
   const conditions = [];
   if (!platformWide) {
     const effectiveHubIds =
-      hubIdParam && auth.hubStaffHubIds.includes(hubIdParam)
-        ? [hubIdParam]
-        : auth.hubStaffHubIds;
+      hubIdParam && auth.hubStaffHubIds.includes(hubIdParam) ? [hubIdParam] : auth.hubStaffHubIds;
     const hubScope = or(
       inArray(books.hubId, effectiveHubIds),
       inArray(books.targetHubId, effectiveHubIds),
@@ -825,9 +851,7 @@ router.get("/books", authMiddleware, requireAuth, async (req, res) => {
   if (statusFilter) conditions.push(eq(books.status, statusFilter));
   if (qRaw.length > 0) {
     const pattern = `%${escapeIlikePattern(qRaw)}%`;
-    conditions.push(
-      sql`(${books.title} ILIKE ${pattern} OR (${books.id})::text ILIKE ${pattern})`,
-    );
+    conditions.push(sql`(${books.title} ILIKE ${pattern} OR (${books.id})::text ILIKE ${pattern})`);
   }
   const whereClause = conditions.length ? and(...conditions) : undefined;
   const w = whereClause ?? sql`true`;
@@ -848,8 +872,8 @@ router.get("/books", authMiddleware, requireAuth, async (req, res) => {
     .where(
       and(
         isNotNull(bookRequests.assignedCopyId),
-        inArray(bookRequests.status, ["fulfilled", "ready"])
-      )
+        inArray(bookRequests.status, ["fulfilled", "ready"]),
+      ),
     )
     .as("br");
 
@@ -874,7 +898,7 @@ router.get("/books", authMiddleware, requireAuth, async (req, res) => {
 
   const titles = [...new Set(booksPayload.map((b: any) => b.title))].filter(Boolean) as string[];
   const statsMap = await getInventoryStatsForTitles(null, titles);
-  
+
   const payloadWithStats = booksPayload.map((b: any) => ({
     ...b,
     inventoryStats: statsMap[`${b.hubId}:${b.title}`] ?? {
@@ -894,8 +918,7 @@ router.get("/overview", authMiddleware, requireAuth, async (req, res) => {
     res.status(403).json({ error: "Hub staff access required." });
     return;
   }
-  const hubIdParam =
-    typeof req.query["hubId"] === "string" ? req.query["hubId"] : undefined;
+  const hubIdParam = typeof req.query["hubId"] === "string" ? req.query["hubId"] : undefined;
   if (hubIdParam && !auth.hubStaffHubIds.includes(hubIdParam)) {
     res.status(403).json({ error: "Forbidden" });
     return;
@@ -904,11 +927,7 @@ router.get("/overview", authMiddleware, requireAuth, async (req, res) => {
   const range: HubOverviewRange = ["today", "week", "month"].includes(rangeRaw)
     ? (rangeRaw as HubOverviewRange)
     : "week";
-  const payload = await buildHubOverviewPayload(
-    auth.hubStaffHubIds,
-    hubIdParam,
-    range,
-  );
+  const payload = await buildHubOverviewPayload(auth.hubStaffHubIds, hubIdParam, range);
   res.json(payload);
 });
 
@@ -923,8 +942,7 @@ router.get("/super-admin-overview", authMiddleware, requireAuth, async (req, res
     res.status(403).json({ error: "Hub staff access required." });
     return;
   }
-  const hubIdParam =
-    typeof req.query["hubId"] === "string" ? req.query["hubId"] : undefined;
+  const hubIdParam = typeof req.query["hubId"] === "string" ? req.query["hubId"] : undefined;
   if (hubIdParam && !auth.hubStaffHubIds.includes(hubIdParam)) {
     res.status(403).json({ error: "Forbidden" });
     return;
@@ -960,8 +978,7 @@ router.get("/commerce", authMiddleware, requireAuth, async (req, res) => {
     res.status(403).json({ error: "Hub staff access required." });
     return;
   }
-  const hubIdParam =
-    typeof req.query["hubId"] === "string" ? req.query["hubId"] : undefined;
+  const hubIdParam = typeof req.query["hubId"] === "string" ? req.query["hubId"] : undefined;
   if (hubIdParam && !auth.hubStaffHubIds.includes(hubIdParam)) {
     res.status(403).json({ error: "Forbidden" });
     return;
@@ -986,8 +1003,7 @@ router.get("/inventory-dashboard", authMiddleware, requireAuth, async (req, res)
   }
 
   const hubIdParam = typeof req.query["hubId"] === "string" ? req.query["hubId"] : undefined;
-  const effectiveHubIds =
-    hubIdParam && hubIds.includes(hubIdParam) ? [hubIdParam] : hubIds;
+  const effectiveHubIds = hubIdParam && hubIds.includes(hubIdParam) ? [hubIdParam] : hubIds;
 
   const hubMeta = await db
     .select({ id: hubs.id, name: hubs.name })
@@ -1084,8 +1100,7 @@ router.get("/pending-p2p", authMiddleware, requireAuth, async (req, res) => {
   const rows = await db.select().from(p2pListings);
   type P2pRow = InferSelectModel<typeof p2pListings>;
   const filtered = rows.filter(
-    (l: P2pRow) =>
-      l.status === "pending_dropoff" && hubIds.includes(l.hubId),
+    (l: P2pRow) => l.status === "pending_dropoff" && hubIds.includes(l.hubId),
   );
   res.json({ listings: filtered });
 });
@@ -1146,15 +1161,55 @@ router.get("/zones", authMiddleware, requireAuth, async (req, res) => {
     return;
   }
   const zones = [
-    { id: 'zone_1', name: 'Computer Science', type: 'shelf', x: 20, y: 30, width: 25, height: 15, aisle: 'A', status: 'idle', details: 'CS, AI, Systems' },
-    { id: 'zone_2', name: 'Mechanical & Civil', type: 'shelf', x: 50, y: 30, width: 25, height: 15, aisle: 'B', status: 'idle', details: 'Core Engineering' },
-    { id: 'zone_3', name: 'Kiosk Desk 1', type: 'kiosk', x: 10, y: 70, width: 12, height: 12, status: 'busy', details: 'Checkout & Returns' },
-    { id: 'zone_4', name: 'RFID Exit Gate', type: 'gate', x: 80, y: 70, width: 8, height: 20, status: 'idle', details: 'Security Telemetry' }
+    {
+      id: "zone_1",
+      name: "Computer Science",
+      type: "shelf",
+      x: 20,
+      y: 30,
+      width: 25,
+      height: 15,
+      aisle: "A",
+      status: "idle",
+      details: "CS, AI, Systems",
+    },
+    {
+      id: "zone_2",
+      name: "Mechanical & Civil",
+      type: "shelf",
+      x: 50,
+      y: 30,
+      width: 25,
+      height: 15,
+      aisle: "B",
+      status: "idle",
+      details: "Core Engineering",
+    },
+    {
+      id: "zone_3",
+      name: "Kiosk Desk 1",
+      type: "kiosk",
+      x: 10,
+      y: 70,
+      width: 12,
+      height: 12,
+      status: "busy",
+      details: "Checkout & Returns",
+    },
+    {
+      id: "zone_4",
+      name: "RFID Exit Gate",
+      type: "gate",
+      x: 80,
+      y: 70,
+      width: 8,
+      height: 20,
+      status: "idle",
+      details: "Security Telemetry",
+    },
   ];
   res.json({ zones });
 });
-
-
 
 router.get("/students", authMiddleware, requireAuth, async (req, res) => {
   const auth = req.auth!;
@@ -1162,7 +1217,8 @@ router.get("/students", authMiddleware, requireAuth, async (req, res) => {
     res.status(403).json({ error: "Hub staff access required." });
     return;
   }
-  const hubId = typeof req.query["hubId"] === "string" ? req.query["hubId"] : auth.hubStaffHubIds[0];
+  const hubId =
+    typeof req.query["hubId"] === "string" ? req.query["hubId"] : auth.hubStaffHubIds[0];
   if (!auth.hubStaffHubIds.includes(hubId) && auth.baseRole !== "super_admin") {
     res.status(403).json({ error: "Forbidden" });
     return;
@@ -1189,38 +1245,45 @@ router.get("/students", authMiddleware, requireAuth, async (req, res) => {
       .limit(limit)
       .offset(offset);
 
-    const result = await Promise.all(studentMemberships.map(async (row: any) => {
-      let earned = 0;
-      let spent = 0;
-      if (row.wallet) {
-        const txs = await db.select().from(walletTransactions).where(eq(walletTransactions.walletId, row.wallet.id));
-        txs.forEach((t: any) => {
-          if (t.type === 'credit') earned += t.amount;
-          if (t.type === 'debit') spent += t.amount;
-        });
-      }
-      
-      const [lastEvt] = await db.select().from(lifecycleEvents)
-        .where(eq(lifecycleEvents.userId, row.user.id))
-        .orderBy(sql`created_at DESC`)
-        .limit(1);
+    const result = await Promise.all(
+      studentMemberships.map(async (row: any) => {
+        let earned = 0;
+        let spent = 0;
+        if (row.wallet) {
+          const txs = await db
+            .select()
+            .from(walletTransactions)
+            .where(eq(walletTransactions.walletId, row.wallet.id));
+          txs.forEach((t: any) => {
+            if (t.type === "credit") earned += t.amount;
+            if (t.type === "debit") spent += t.amount;
+          });
+        }
 
-      return {
-        id: row.user.id,
-        publicId: row.user.publicId,
-        name: row.user.name,
-        email: row.user.email,
-        phone: row.user.phone,
-        accountStatus: row.user.accountStatus,
-        createdAt: row.user.createdAt,
-        walletBalance: row.wallet?.balance || 0,
-        creditsEarned: earned,
-        creditsSpent: spent,
-        subscriptionStatus: row.subscription?.status || "none",
-        subscriptionPlan: row.plan?.name || "Free",
-        lastActivityDate: lastEvt?.createdAt || row.user.createdAt,
-      };
-    }));
+        const [lastEvt] = await db
+          .select()
+          .from(lifecycleEvents)
+          .where(eq(lifecycleEvents.userId, row.user.id))
+          .orderBy(sql`created_at DESC`)
+          .limit(1);
+
+        return {
+          id: row.user.id,
+          publicId: row.user.publicId,
+          name: row.user.name,
+          email: row.user.email,
+          phone: row.user.phone,
+          accountStatus: row.user.accountStatus,
+          createdAt: row.user.createdAt,
+          walletBalance: row.wallet?.balance || 0,
+          creditsEarned: earned,
+          creditsSpent: spent,
+          subscriptionStatus: row.subscription?.status || "none",
+          subscriptionPlan: row.plan?.name || "Free",
+          lastActivityDate: lastEvt?.createdAt || row.user.createdAt,
+        };
+      }),
+    );
 
     const [{ count: total }] = await db
       .select({ count: sql`count(*)`.mapWith(Number) })
@@ -1234,7 +1297,7 @@ router.get("/students", authMiddleware, requireAuth, async (req, res) => {
         page,
         limit,
         totalPages: Math.ceil(total / limit),
-      }
+      },
     });
   } catch (error) {
     logger.error({ error, hubId }, "Error fetching hub students");
@@ -1248,7 +1311,8 @@ router.get("/students/analytics", authMiddleware, requireAuth, async (req, res) 
     res.status(403).json({ error: "Hub staff access required." });
     return;
   }
-  const hubId = typeof req.query["hubId"] === "string" ? req.query["hubId"] : auth.hubStaffHubIds[0];
+  const hubId =
+    typeof req.query["hubId"] === "string" ? req.query["hubId"] : auth.hubStaffHubIds[0];
   if (!auth.hubStaffHubIds.includes(hubId) && auth.baseRole !== "super_admin") {
     res.status(403).json({ error: "Forbidden" });
     return;
@@ -1269,22 +1333,29 @@ router.get("/students/analytics", authMiddleware, requireAuth, async (req, res) 
       .leftJoin(userSubscriptions, eq(userSubscriptions.userId, users.id))
       .leftJoin(subscriptionPlans, eq(subscriptionPlans.id, userSubscriptions.planId));
 
-    let totalStudents = studentMemberships.length;
+    const totalStudents = studentMemberships.length;
     let activeSubscriptions = 0;
     let expiredSubscriptions = 0;
     let totalCreditsIssued = 0;
     let totalCreditsRedeemed = 0;
 
     for (const row of studentMemberships) {
-      if (row.subscription?.status === 'active') activeSubscriptions++;
-      if (row.subscription?.status === 'canceled' && row.subscription?.currentPeriodEnd && new Date(row.subscription.currentPeriodEnd) < new Date()) {
+      if (row.subscription?.status === "active") activeSubscriptions++;
+      if (
+        row.subscription?.status === "canceled" &&
+        row.subscription?.currentPeriodEnd &&
+        new Date(row.subscription.currentPeriodEnd) < new Date()
+      ) {
         expiredSubscriptions++;
       }
       if (row.wallet) {
-        const txs = await db.select().from(walletTransactions).where(eq(walletTransactions.walletId, row.wallet.id));
+        const txs = await db
+          .select()
+          .from(walletTransactions)
+          .where(eq(walletTransactions.walletId, row.wallet.id));
         txs.forEach((t: any) => {
-          if (t.type === 'credit') totalCreditsIssued += t.amount;
-          if (t.type === 'debit') totalCreditsRedeemed += t.amount;
+          if (t.type === "credit") totalCreditsIssued += t.amount;
+          if (t.type === "debit") totalCreditsRedeemed += t.amount;
         });
       }
     }
@@ -1298,8 +1369,8 @@ router.get("/students/analytics", authMiddleware, requireAuth, async (req, res) 
       walletActivityTrends: {
         issued: totalCreditsIssued,
         redeemed: totalCreditsRedeemed,
-        net: totalCreditsIssued - totalCreditsRedeemed
-      }
+        net: totalCreditsIssued - totalCreditsRedeemed,
+      },
     });
   } catch (error) {
     logger.error({ error, hubId }, "Error fetching hub student analytics");

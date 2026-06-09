@@ -22,7 +22,10 @@ export async function adminCloseBookRequest(params: {
   actorId: string;
   outcome: "cancelled" | "expired";
   reason?: string;
-}): Promise<{ request: (typeof bookRequests.$inferSelect) | null; code: "ok" | "not_found" | "terminal" | "picked" }> {
+}): Promise<{
+  request: typeof bookRequests.$inferSelect | null;
+  code: "ok" | "not_found" | "terminal" | "picked";
+}> {
   const { requestId, actorId, outcome, reason } = params;
   return await db.transaction(async (tx) => {
     await tx.execute(sql`SELECT id FROM book_requests WHERE id = ${requestId}::uuid FOR UPDATE`);
@@ -43,7 +46,9 @@ export async function adminCloseBookRequest(params: {
 
     const copyId =
       fresh.assignedCopyId &&
-        (fresh.status === "available_for_collection" || fresh.status === "fulfilled" || fresh.status === "ready")
+      (fresh.status === "available_for_collection" ||
+        fresh.status === "fulfilled" ||
+        fresh.status === "ready")
         ? fresh.assignedCopyId
         : null;
 
@@ -74,13 +79,21 @@ export async function adminCloseBookRequest(params: {
       action: outcome === "cancelled" ? "ADMIN_BOOK_REQUEST_CLOSE" : "ADMIN_BOOK_REQUEST_EXPIRE",
       resourceType: "book_request",
       resourceId: requestId,
-      meta: { priorStatus: fresh.status, outcome, requestUserId: fresh.userId, reason: reason ?? null },
+      meta: {
+        priorStatus: fresh.status,
+        outcome,
+        requestUserId: fresh.userId,
+        reason: reason ?? null,
+      },
     });
     return { request: u, code: "ok" as const };
   });
 }
 
-export async function adminForceReleaseReservedCopy(bookId: string, actorId: string): Promise<{
+export async function adminForceReleaseReservedCopy(
+  bookId: string,
+  actorId: string,
+): Promise<{
   ok: boolean;
   code: "ok" | "not_found" | "not_reserved";
 }> {
@@ -114,14 +127,26 @@ export async function adminLinkCopyToRequest(params: {
   allowP2pSource: boolean;
   allowTitleMismatch: boolean;
   assignmentVerified?: boolean;
-}): Promise<{ request: (typeof bookRequests.$inferSelect) | null; code: "ok" | "not_found" | "assign_rejected" }> {
-  const { requestId, bookId, actorId, allowP2pSource, allowTitleMismatch, assignmentVerified } = params;
+}): Promise<{
+  request: typeof bookRequests.$inferSelect | null;
+  code: "ok" | "not_found" | "assign_rejected";
+}> {
+  const { requestId, bookId, actorId, allowP2pSource, allowTitleMismatch, assignmentVerified } =
+    params;
   return await db.transaction(async (tx) => {
-    const [row] = await tx.select().from(bookRequests).where(eq(bookRequests.id, requestId)).limit(1);
+    const [row] = await tx
+      .select()
+      .from(bookRequests)
+      .where(eq(bookRequests.id, requestId))
+      .limit(1);
     if (!row) {
       return { request: null, code: "not_found" as const };
     }
-    if (isTerminalBookRequest(row.status) || row.status === "picked" || row.status === "delivered") {
+    if (
+      isTerminalBookRequest(row.status) ||
+      row.status === "picked" ||
+      row.status === "delivered"
+    ) {
       return { request: null, code: "assign_rejected" as const };
     }
     const ok = await tryAssignCopyToBookRequest(tx, bookId, requestId, {
@@ -133,7 +158,11 @@ export async function adminLinkCopyToRequest(params: {
     if (!ok) {
       return { request: null, code: "assign_rejected" as const };
     }
-    const [out] = await tx.select().from(bookRequests).where(eq(bookRequests.id, requestId)).limit(1);
+    const [out] = await tx
+      .select()
+      .from(bookRequests)
+      .where(eq(bookRequests.id, requestId))
+      .limit(1);
     if (!out) {
       return { request: null, code: "not_found" as const };
     }
@@ -167,7 +196,7 @@ export async function adminSetBookRequestStatus(params: {
   actorId: string;
   to: BookRequestStatus;
 }): Promise<{
-  request: (typeof bookRequests.$inferSelect) | null;
+  request: typeof bookRequests.$inferSelect | null;
   code: string;
 }> {
   const { requestId, actorId, to } = params;
@@ -190,11 +219,19 @@ export async function adminSetBookRequestStatus(params: {
 
   return await db.transaction(async (tx) => {
     await tx.execute(sql`SELECT id FROM book_requests WHERE id = ${requestId}::uuid FOR UPDATE`);
-    const [row] = await tx.select().from(bookRequests).where(eq(bookRequests.id, requestId)).limit(1);
+    const [row] = await tx
+      .select()
+      .from(bookRequests)
+      .where(eq(bookRequests.id, requestId))
+      .limit(1);
     if (!row) {
       return { request: null, code: "not_found" };
     }
-    if (isTerminalBookRequest(row.status) || row.status === "picked" || row.status === "delivered") {
+    if (
+      isTerminalBookRequest(row.status) ||
+      row.status === "picked" ||
+      row.status === "delivered"
+    ) {
       return { request: null, code: "terminal" };
     }
     const from = row.status;
@@ -302,17 +339,18 @@ export async function adminSetBookRequestStatus(params: {
   });
 }
 
-export async function adminRecordPicked(params: {
-  requestId: string;
-  actorId: string;
-}): Promise<{
-  request: (typeof bookRequests.$inferSelect) | null;
+export async function adminRecordPicked(params: { requestId: string; actorId: string }): Promise<{
+  request: typeof bookRequests.$inferSelect | null;
   code: string;
 }> {
   const { requestId, actorId } = params;
   return await db.transaction(async (tx) => {
     await tx.execute(sql`SELECT id FROM book_requests WHERE id = ${requestId}::uuid FOR UPDATE`);
-    const [freshRow] = await tx.select().from(bookRequests).where(eq(bookRequests.id, requestId)).limit(1);
+    const [freshRow] = await tx
+      .select()
+      .from(bookRequests)
+      .where(eq(bookRequests.id, requestId))
+      .limit(1);
     if (!freshRow) {
       return { request: null, code: "not_found" };
     }
@@ -380,19 +418,35 @@ export async function reassignBookRequestToHub(params: {
   actorId: string;
   reason?: string;
 }): Promise<{
-  request: (typeof bookRequests.$inferSelect) | null;
+  request: typeof bookRequests.$inferSelect | null;
   previousHubId?: string | null;
   reassigned?: boolean;
-  code: "ok" | "not_found" | "same_hub" | "no_hub" | "inactive_hub" | "has_copy" | "bad_state" | "stale";
+  code:
+    | "ok"
+    | "not_found"
+    | "same_hub"
+    | "no_hub"
+    | "inactive_hub"
+    | "has_copy"
+    | "bad_state"
+    | "stale";
 }> {
   const { requestId, newHubId, actorId, reason } = params;
   return await db.transaction(async (tx) => {
     await tx.execute(sql`SELECT id FROM book_requests WHERE id = ${requestId}::uuid FOR UPDATE`);
-    const [row] = await tx.select().from(bookRequests).where(eq(bookRequests.id, requestId)).limit(1);
+    const [row] = await tx
+      .select()
+      .from(bookRequests)
+      .where(eq(bookRequests.id, requestId))
+      .limit(1);
     if (!row) {
       return { request: null, previousHubId: null, reassigned: false, code: "not_found" as const };
     }
-    if (isTerminalBookRequest(row.status) || row.status === "picked" || row.status === "delivered") {
+    if (
+      isTerminalBookRequest(row.status) ||
+      row.status === "picked" ||
+      row.status === "delivered"
+    ) {
       return { request: null, previousHubId: null, reassigned: false, code: "bad_state" as const };
     }
     if (row.assignedCopyId) {
@@ -408,7 +462,12 @@ export async function reassignBookRequestToHub(params: {
     try {
       await requireActiveHub(tx as DbClient, newHubId);
     } catch {
-      return { request: null, previousHubId: null, reassigned: false, code: "inactive_hub" as const };
+      return {
+        request: null,
+        previousHubId: null,
+        reassigned: false,
+        code: "inactive_hub" as const,
+      };
     }
     if (row.status !== "pending" && row.status !== "requested" && row.status !== "routed") {
       return { request: null, previousHubId: null, reassigned: false, code: "bad_state" as const };
@@ -420,15 +479,13 @@ export async function reassignBookRequestToHub(params: {
         hubId: newHubId,
         updatedAt: new Date(),
       })
-      .where(
-        and(
-          eq(bookRequests.id, requestId),
-          sql`${bookRequests.assignedCopyId} IS NULL`,
-        ),
-      )
+      .where(and(eq(bookRequests.id, requestId), sql`${bookRequests.assignedCopyId} IS NULL`))
       .returning();
     if (!u) {
       return { request: null, previousHubId: row.hubId, reassigned: false, code: "stale" as const };
+    }
+    if (!row.hubId) {
+      return { request: null, previousHubId: null, reassigned: false, code: "stale" as const };
     }
     await tx.insert(bookRequestHubReassignments).values({
       requestId,
@@ -443,7 +500,11 @@ export async function reassignBookRequestToHub(params: {
         preferOnly: true,
       });
     }
-    const [out] = await tx.select().from(bookRequests).where(eq(bookRequests.id, requestId)).limit(1);
+    const [out] = await tx
+      .select()
+      .from(bookRequests)
+      .where(eq(bookRequests.id, requestId))
+      .limit(1);
     await logAudit({
       userId: row.userId,
       actorId,
@@ -451,7 +512,12 @@ export async function reassignBookRequestToHub(params: {
       action: "ADMIN_BOOK_REQUEST_REASSIGN_HUB",
       resourceType: "book_request",
       resourceId: requestId,
-      meta: { fromHubId: row.hubId, toHubId: newHubId, reason: reason ?? null, requestUserId: row.userId },
+      meta: {
+        fromHubId: row.hubId,
+        toHubId: newHubId,
+        reason: reason ?? null,
+        requestUserId: row.userId,
+      },
     });
     await recordLifecycleEvent({
       type: "request_reassigned",

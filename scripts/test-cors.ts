@@ -25,7 +25,11 @@ function parseAllowedOrigins(): OriginRule[] {
       if (s.includes("*")) {
         const m = /^(https?):\/\/\*\.(.+)$/i.exec(s);
         if (!m) return { kind: "exact", origin: s };
-        return { kind: "wildcard", scheme: m[1]!.toLowerCase() as "http" | "https", suffix: `.${m[2]}` };
+        return {
+          kind: "wildcard",
+          scheme: m[1]!.toLowerCase() as "http" | "https",
+          suffix: `.${m[2]}`,
+        };
       }
       return { kind: "exact", origin: s };
     });

@@ -1,12 +1,6 @@
 import { z } from "zod";
 
-export const hubKindSchema = z.enum([
-  "college",
-  "public",
-  "government",
-  "private",
-  "other",
-]);
+export const hubKindSchema = z.enum(["college", "public", "government", "private", "other"]);
 
 export const registerSchema = z
   .object({
@@ -23,7 +17,11 @@ export const registerSchema = z
     const t = data.accountType ?? "student";
     if (t !== "hub") return;
     if (!data.hubName?.trim()) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Hub name is required", path: ["hubName"] });
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Hub name is required",
+        path: ["hubName"],
+      });
     }
     if (!data.hubLocation?.trim()) {
       ctx.addIssue({
@@ -33,7 +31,11 @@ export const registerSchema = z
       });
     }
     if (!data.hubKind) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Hub type is required", path: ["hubKind"] });
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Hub type is required",
+        path: ["hubKind"],
+      });
     }
   });
 

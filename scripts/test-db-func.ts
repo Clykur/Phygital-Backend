@@ -7,7 +7,7 @@ async function run() {
       SELECT get_student_dashboard_data('00000000-0000-0000-0000-000000000000');
     `);
     console.log(res.rows[0]);
-  } catch(e) {
+  } catch (e) {
     console.error(e);
   } finally {
     pool.end();

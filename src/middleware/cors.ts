@@ -31,7 +31,11 @@ function parseAllowedOrigins(): OriginRule[] {
         // Supports: https://*.vercel.app
         const m = /^(https?):\/\/\*\.(.+)$/i.exec(s);
         if (!m) return { kind: "exact", origin: s };
-        return { kind: "wildcard", scheme: m[1]!.toLowerCase() as "http" | "https", suffix: `.${m[2]}` };
+        return {
+          kind: "wildcard",
+          scheme: m[1]!.toLowerCase() as "http" | "https",
+          suffix: `.${m[2]}`,
+        };
       }
       return { kind: "exact", origin: s };
     });
@@ -66,8 +70,7 @@ function isAllowedOrigin(origin: string, rules: OriginRule[]): boolean {
 
 function allowCredentials(): boolean {
   return (
-    process.env.CORS_ALLOW_CREDENTIALS === "1" ||
-    process.env.CORS_ALLOW_CREDENTIALS === "true"
+    process.env.CORS_ALLOW_CREDENTIALS === "1" || process.env.CORS_ALLOW_CREDENTIALS === "true"
   );
 }
 
@@ -110,4 +113,3 @@ export function corsMiddleware(req: Request, res: Response, next: NextFunction):
 
   next();
 }
-

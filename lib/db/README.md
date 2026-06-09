@@ -17,7 +17,7 @@ This package holds the Drizzle schema and **versioned SQL migrations** under `dr
 ### Supabase connection string
 
 1. Open your project → **Project Settings** → **Database**.
-2. Copy the **URI** (use the *pooler* or *direct* connection as you prefer).
+2. Copy the **URI** (use the _pooler_ or _direct_ connection as you prefer).
 3. Ensure SSL is required, e.g. append `?sslmode=require` if it is not already present.
 
 Put the URL in the **repo root** `.env.local` (or `.env`):
@@ -32,11 +32,11 @@ DATABASE_URL=postgresql://postgres.[ref]:[YOUR-PASSWORD]@aws-0-[region].pooler.s
 
 ## Commands (run from repository root)
 
-| Command | What it does |
-|--------|----------------|
-| `npm run db:migrate` | Applies every pending migration in `lib/db/drizzle/` to `DATABASE_URL` (recommended for Supabase). |
-| `npm run db:push` | Pushes the current **TypeScript schema** to the database **without** using migration files (handy for local experiments; not a substitute for versioned migrations in production). |
-| `npm run db:generate` | Generates a **new** migration file from schema changes (after you edit `lib/db/src/schema/`). |
+| Command               | What it does                                                                                                                                                                       |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run db:migrate`  | Applies every pending migration in `lib/db/drizzle/` to `DATABASE_URL` (recommended for Supabase).                                                                                 |
+| `npm run db:push`     | Pushes the current **TypeScript schema** to the database **without** using migration files (handy for local experiments; not a substitute for versioned migrations in production). |
+| `npm run db:generate` | Generates a **new** migration file from schema changes (after you edit `lib/db/src/schema/`).                                                                                      |
 
 From `lib/db` directly:
 
@@ -51,11 +51,11 @@ pnpm run generate
 
 ## What the migrations do
 
-| File | Purpose |
-|------|---------|
-| `0000_add_cover_image_urls.sql` | Adds `cover_image_url` to `books` and `p2p_listings` (if missing) and backfills URLs for known titles. |
+| File                               | Purpose                                                                                                                                                                                                      |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `0000_add_cover_image_urls.sql`    | Adds `cover_image_url` to `books` and `p2p_listings` (if missing) and backfills URLs for known titles.                                                                                                       |
 | `0001_seed_supabase_demo_data.sql` | Inserts demo rows into **all app tables** (hubs, users, subscriptions, memberships, books, `p2p_listings`, `book_requests`, `audit_logs`). **Skips** if `phygital-demo-peer@example.invalid` already exists. |
-| `0002_books_created_at.sql` | Adds `books.created_at` (for “newest available first” on the library) and backfills staggered timestamps for the fixed demo book ids. |
+| `0002_books_created_at.sql`        | Adds `books.created_at` (for “newest available first” on the library) and backfills staggered timestamps for the fixed demo book ids.                                                                        |
 
 Apply everything to Supabase:
 
@@ -96,13 +96,13 @@ All synthetic users share the same password (matches the API `hashPassword` form
 
 - **Password:** `phygital-demo-2026`
 
-| Email | Notes |
-|-------|--------|
-| `phygital-demo-peer@example.invalid` | Premium; owns several P2P listings |
-| `phygital-seed-anya@example.invalid` | Premium |
-| `phygital-seed-rohan@example.invalid` | Premium |
-| `phygital-seed-priya@example.invalid` | No subscription (non‑premium) |
-| `phygital-seed-hub-staff@example.invalid` | Hub admin on two hubs |
+| Email                                     | Notes                              |
+| ----------------------------------------- | ---------------------------------- |
+| `phygital-demo-peer@example.invalid`      | Premium; owns several P2P listings |
+| `phygital-seed-anya@example.invalid`      | Premium                            |
+| `phygital-seed-rohan@example.invalid`     | Premium                            |
+| `phygital-seed-priya@example.invalid`     | No subscription (non‑premium)      |
+| `phygital-seed-hub-staff@example.invalid` | Hub admin on two hubs              |
 
 ---
 

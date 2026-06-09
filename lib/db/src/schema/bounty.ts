@@ -1,11 +1,4 @@
-import {
-  pgTable,
-  uuid,
-  text,
-  timestamp,
-  integer,
-  jsonb,
-} from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, integer, jsonb } from "drizzle-orm/pg-core";
 import { users, hubs, books } from "./rbac";
 
 /** Hub-owner acquisition request — students fulfill by bringing books. */

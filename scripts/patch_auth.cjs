@@ -1,8 +1,8 @@
-const fs = require('fs');
-const path = require('path');
-const repoRoot = path.resolve(__dirname, '..');
-const targetPath = path.join(repoRoot, 'src/routes/auth.ts');
-let content = fs.readFileSync(targetPath, 'utf8');
+const fs = require("fs");
+const path = require("path");
+const repoRoot = path.resolve(__dirname, "..");
+const targetPath = path.join(repoRoot, "src/routes/auth.ts");
+let content = fs.readFileSync(targetPath, "utf8");
 
 const oldGoogleAuth = `router.post("/google", async (req, res) => {
   const { token } = req.body;

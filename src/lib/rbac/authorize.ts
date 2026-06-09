@@ -6,11 +6,7 @@ function isHubStaff(user: AuthUser, hubId: string): boolean {
   return user.hubStaffHubIds.includes(hubId);
 }
 
-export function authorize(
-  user: AuthUser | null,
-  action: Action,
-  resource: RbacResource,
-): boolean {
+export function authorize(user: AuthUser | null, action: Action, resource: RbacResource): boolean {
   if (!user) {
     return action === ACTIONS.VIEW_CATALOG && resource.type === "catalog";
   }
@@ -23,8 +19,7 @@ export function authorize(
 
   if (freeAllowed) return true;
 
-  const premiumAllowed =
-    action === ACTIONS.CREATE_P2P_LISTING;
+  const premiumAllowed = action === ACTIONS.CREATE_P2P_LISTING;
 
   if (premiumAllowed && !isPremiumOk(user)) return false;
 
@@ -38,10 +33,7 @@ export function authorize(
     return resource.ownerId !== user.userId;
   }
 
-  if (
-    action === ACTIONS.SCAN_BOOK ||
-    action === ACTIONS.MANAGE_INVENTORY
-  ) {
+  if (action === ACTIONS.SCAN_BOOK || action === ACTIONS.MANAGE_INVENTORY) {
     if (resource.type !== "book") return false;
     return isHubStaff(user, resource.hubId);
   }

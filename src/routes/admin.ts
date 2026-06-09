@@ -31,16 +31,9 @@ import { ACTIONS } from "../lib/rbac/actions";
 
 const router: IRouter = Router();
 
-const hubKindSchema = z.enum([
-  "college",
-  "public",
-  "government",
-  "private",
-  "other",
-]);
+const hubKindSchema = z.enum(["college", "public", "government", "private", "other"]);
 
 const baseRoleSchema = z.enum(["user", "hub", "super_admin"]);
-const accountStatusSchema = z.enum(["active", "held", "deactivated"]);
 
 const patchUserSchema = z
   .object({
@@ -82,9 +75,7 @@ router.get("/users", requireSuperAdmin, async (req, res) => {
     ? or(ilike(users.name, pattern), ilike(users.email, pattern))
     : undefined;
   const fromUsers = db.select({ n: count() }).from(users);
-  const [totalRow] = whereClause
-    ? await fromUsers.where(whereClause)
-    : await fromUsers;
+  const [totalRow] = whereClause ? await fromUsers.where(whereClause) : await fromUsers;
   const fromUsersList = db
     .select({
       id: users.id,
@@ -102,10 +93,7 @@ router.get("/users", requireSuperAdmin, async (req, res) => {
         .orderBy(desc(users.createdAt))
         .limit(limit)
         .offset(offset)
-    : await fromUsersList
-        .orderBy(desc(users.createdAt))
-        .limit(limit)
-        .offset(offset);
+    : await fromUsersList.orderBy(desc(users.createdAt)).limit(limit).offset(offset);
   res.json({
     users: rows.map((r) => ({
       ...r,
@@ -491,27 +479,14 @@ router.get("/hubs", requireSuperAdmin, async (req, res) => {
   const offset = Math.max(0, parseInt(String(req.query.offset ?? "0"), 10) || 0);
   const pattern = q ? `%${escapeIlikePattern(q)}%` : null;
   const whereClause: SQL | undefined = pattern
-    ? or(
-        ilike(hubs.name, pattern),
-        ilike(hubs.location, pattern),
-        ilike(hubs.kind, pattern),
-      )
+    ? or(ilike(hubs.name, pattern), ilike(hubs.location, pattern), ilike(hubs.kind, pattern))
     : undefined;
   const fromHubs = db.select({ n: count() }).from(hubs);
-  const [totalRow] = whereClause
-    ? await fromHubs.where(whereClause)
-    : await fromHubs;
+  const [totalRow] = whereClause ? await fromHubs.where(whereClause) : await fromHubs;
   const fromHubsList = db.select().from(hubs);
   const hubList = whereClause
-    ? await fromHubsList
-        .where(whereClause)
-        .orderBy(asc(hubs.name))
-        .limit(limit)
-        .offset(offset)
-    : await fromHubsList
-        .orderBy(asc(hubs.name))
-        .limit(limit)
-        .offset(offset);
+    ? await fromHubsList.where(whereClause).orderBy(asc(hubs.name)).limit(limit).offset(offset)
+    : await fromHubsList.orderBy(asc(hubs.name)).limit(limit).offset(offset);
   const memberCounts: { hubId: string; n: number }[] = await db
     .select({ hubId: memberships.hubId, n: count() })
     .from(memberships)
@@ -537,7 +512,9 @@ router.get("/hubs", requireSuperAdmin, async (req, res) => {
         ),
       )
       .groupBy(bookRequests.hubId);
-    for (const r of rRows) actReqByHub.set(r.hubId, Number(r.n));
+    for (const r of rRows) {
+      if (r.hubId) actReqByHub.set(r.hubId, Number(r.n));
+    }
   }
   res.json({
     hubs: hubList.map((h) => ({
@@ -618,7 +595,13 @@ router.get("/hubs/:hubId", requireSuperAdmin, async (req, res) => {
       updatedAt: books.updatedAt,
     })
     .from(books)
-    .where(and(eq(books.hubId, hubId), eq(books.status, "checked_out"), eq(books.source, "hub_inventory")))
+    .where(
+      and(
+        eq(books.hubId, hubId),
+        eq(books.status, "checked_out"),
+        eq(books.source, "hub_inventory"),
+      ),
+    )
     .orderBy(desc(books.updatedAt))
     .limit(80);
   const soldBookRows = await db
@@ -652,13 +635,20 @@ router.get("/hubs/:hubId", requireSuperAdmin, async (req, res) => {
   ];
   const commerceWhere =
     listingIds.length === 0
-      ? and(inArray(auditLogs.action, commerceActions), eq(auditLogs.denial, false), eq(auditLogs.hubId, hubId))
+      ? and(
+          inArray(auditLogs.action, commerceActions),
+          eq(auditLogs.denial, false),
+          eq(auditLogs.hubId, hubId),
+        )
       : and(
           inArray(auditLogs.action, commerceActions),
           eq(auditLogs.denial, false),
           or(
             eq(auditLogs.hubId, hubId),
-            and(eq(auditLogs.resourceType, "p2p_listing"), inArray(auditLogs.resourceId, listingIds)),
+            and(
+              eq(auditLogs.resourceType, "p2p_listing"),
+              inArray(auditLogs.resourceId, listingIds),
+            ),
           ),
         );
   const [txTotal] = await db.select({ n: count() }).from(auditLogs).where(commerceWhere);
@@ -927,7 +917,9 @@ router.get("/system-health", requireSuperAdmin, async (req, res) => {
 router.get("/notification-deliveries", requireSuperAdmin, async (req, res) => {
   const statusQ =
     typeof req.query["status"] === "string" &&
-    (req.query["status"] === "failed" || req.query["status"] === "pending" || req.query["status"] === "sent")
+    (req.query["status"] === "failed" ||
+      req.query["status"] === "pending" ||
+      req.query["status"] === "sent")
       ? req.query["status"]
       : undefined;
   const limit = Math.min(200, Math.max(1, parseInt(String(req.query["limit"] ?? "50"), 10) || 50));
@@ -963,7 +955,11 @@ router.get("/notification-deliveries", requireSuperAdmin, async (req, res) => {
   const requestIds = [
     ...new Set(
       filteredByType
-        .map((r) => (typeof r.payload["bookRequestId"] === "string" ? (r.payload["bookRequestId"] as string) : null))
+        .map((r) =>
+          typeof r.payload["bookRequestId"] === "string"
+            ? (r.payload["bookRequestId"] as string)
+            : null,
+        )
         .filter((id): id is string => !!id),
     ),
   ];
@@ -973,15 +969,23 @@ router.get("/notification-deliveries", requireSuperAdmin, async (req, res) => {
       .select({ id: bookRequests.id, hubId: bookRequests.hubId })
       .from(bookRequests)
       .where(inArray(bookRequests.id, requestIds));
-    for (const r of reqRows) requestHub.set(r.id, r.hubId);
+    for (const r of reqRows) {
+      if (r.hubId) requestHub.set(r.id, r.hubId);
+    }
   }
   const withHub = filteredByType.map((r) => {
-    const reqId = typeof r.payload["bookRequestId"] === "string" ? (r.payload["bookRequestId"] as string) : null;
-    const payloadHubId = typeof r.payload["hubId"] === "string" ? (r.payload["hubId"] as string) : null;
-    const hubId = payloadHubId ?? (reqId ? requestHub.get(reqId) ?? null : null);
+    const reqId =
+      typeof r.payload["bookRequestId"] === "string"
+        ? (r.payload["bookRequestId"] as string)
+        : null;
+    const payloadHubId =
+      typeof r.payload["hubId"] === "string" ? (r.payload["hubId"] as string) : null;
+    const hubId = payloadHubId ?? (reqId ? (requestHub.get(reqId) ?? null) : null);
     return { ...r, hubId };
   });
-  const inScope = parsedHubId?.success ? withHub.filter((r) => r.hubId === parsedHubId.data) : withHub;
+  const inScope = parsedHubId?.success
+    ? withHub.filter((r) => r.hubId === parsedHubId.data)
+    : withHub;
   res.json({
     deliveries: inScope.map((r) => ({
       ...r,
@@ -1006,7 +1010,9 @@ router.post("/notification-deliveries/:id/retry", requireSuperAdmin, async (req,
     meta: { success: ok },
   });
   if (!ok) {
-    res.status(409).json({ error: "Retry did not complete (empty body, max retries, or missing row)." });
+    res
+      .status(409)
+      .json({ error: "Retry did not complete (empty body, max retries, or missing row)." });
     return;
   }
   res.json({ ok: true });
@@ -1105,7 +1111,9 @@ router.post("/book-requests/:id/close", requireSuperAdmin, async (req, res) => {
   }
   const body = closeReqBody.safeParse(req.body);
   if (!body.success) {
-    res.status(400).json({ error: "Body must include confirm: true and outcome: cancelled|expired" });
+    res
+      .status(400)
+      .json({ error: "Body must include confirm: true and outcome: cancelled|expired" });
     return;
   }
   const r = await adminCloseBookRequest({
@@ -1185,11 +1193,11 @@ router.post("/book-requests/:id/reassign-hub", requireSuperAdmin, async (req, re
     res.status(409).json({ error: "Could not update" });
     return;
   }
-  const hubNameRow = await db
-    .select({ name: hubs.name })
-    .from(hubs)
-    .where(eq(hubs.id, r.request.hubId))
-    .limit(1);
+  const requestHubId = r.request.hubId;
+  const hubNameRow =
+    requestHubId != null
+      ? await db.select({ name: hubs.name }).from(hubs).where(eq(hubs.id, requestHubId)).limit(1)
+      : [];
   await notifyUser({
     userId: r.request.userId,
     kind: "book_request_reassigned",
@@ -1241,7 +1249,9 @@ router.post("/book-requests/:id/assign-copy", requireSuperAdmin, async (req, res
     return;
   }
   if (r.code === "assign_rejected") {
-    res.status(409).json({ error: "Could not link copy (mismatch, wrong hub, or no available copy)." });
+    res
+      .status(409)
+      .json({ error: "Could not link copy (mismatch, wrong hub, or no available copy)." });
     return;
   }
   res.json({ request: r.request });
@@ -1266,16 +1276,21 @@ router.post("/book-requests/:id/assign-any-copy", requireSuperAdmin, async (req,
     res.status(404).json({ error: "Request not found" });
     return;
   }
+  if (!row.hubId) {
+    res.status(409).json({ error: "Request has no hub" });
+    return;
+  }
+  const requestHubId = row.hubId;
   const normalized = (row.bookTitle ?? "").trim().toLowerCase();
   const candidates = await db
     .select({ id: books.id, title: books.title, source: books.source, createdAt: books.createdAt })
     .from(books)
-    .where(and(eq(books.hubId, row.hubId), eq(books.status, "available")))
+    .where(and(eq(books.hubId, requestHubId), eq(books.status, "available")))
     .orderBy(books.createdAt)
     .limit(250);
   const match = normalized
     ? candidates.find((c) => c.title.trim().toLowerCase() === normalized)
-    : candidates.find((c) => c.source === "hub_inventory") ?? candidates[0];
+    : (candidates.find((c) => c.source === "hub_inventory") ?? candidates[0]);
   let selected = match ?? null;
   if (!selected && !normalized) {
     const crossHubCandidates = await db
@@ -1295,7 +1310,9 @@ router.post("/book-requests/:id/assign-any-copy", requireSuperAdmin, async (req,
       if (moved.code === "ok" && moved.request) {
         selected = { id: crossHub.id, title: "", source: "hub_inventory", createdAt: new Date() };
       } else {
-        res.status(409).json({ error: "Request could not be reassigned for auto-assignment fallback." });
+        res
+          .status(409)
+          .json({ error: "Request could not be reassigned for auto-assignment fallback." });
         return;
       }
     }
@@ -1329,15 +1346,7 @@ router.post("/book-requests/:id/assign-any-copy", requireSuperAdmin, async (req,
 
 const overrideStatus = z
   .object({
-    to: z.enum([
-      "requested",
-      "routed",
-      "fulfilled",
-      "ready",
-      "picked",
-      "expired",
-      "cancelled",
-    ]),
+    to: z.enum(["requested", "routed", "fulfilled", "ready", "picked", "expired", "cancelled"]),
     confirm: z.literal(true),
   })
   .strict();
@@ -1388,7 +1397,10 @@ router.post("/books/:id/force-release-reserved", requireSuperAdmin, async (req, 
     res.status(400).json({ error: "Invalid book id" });
     return;
   }
-  const body = z.object({ confirm: z.literal(true) }).strict().safeParse(req.body);
+  const body = z
+    .object({ confirm: z.literal(true) })
+    .strict()
+    .safeParse(req.body);
   if (!body.success) {
     res.status(400).json({ error: "confirm: true required" });
     return;

@@ -1,10 +1,10 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const targetPath = path.join(repoRoot, 'src/routes/auth.ts');
-let code = fs.readFileSync(targetPath, 'utf8');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const targetPath = path.join(repoRoot, "src/routes/auth.ts");
+let code = fs.readFileSync(targetPath, "utf8");
 
 const replacement = `      if (accountType === "hub" || (accountType === "super_admin" && parsed.data.hubName)) {
         const hubName = parsed.data.hubName!.trim();
@@ -47,5 +47,8 @@ const replacement = `      if (accountType === "hub" || (accountType === "super_
         }
       }`;
 
-code = code.replace(/      if \(accountType === "hub".*?role: "hub_admin",\n        \}\);\n      \}/s, replacement);
+code = code.replace(
+  / {6}if \(accountType === "hub".*?role: "hub_admin",\n {8}\}\);\n {6}\}/s,
+  replacement,
+);
 fs.writeFileSync(targetPath, code);

@@ -1,11 +1,4 @@
-import {
-  pgTable,
-  uuid,
-  text,
-  timestamp,
-  integer,
-  json,
-} from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, integer, json } from "drizzle-orm/pg-core";
 import { users, hubs } from "./rbac";
 
 export const wallets = pgTable("wallets", {
@@ -15,12 +8,8 @@ export const wallets = pgTable("wallets", {
     .references(() => users.id, { onDelete: "cascade" })
     .unique(),
   balance: integer("balance").notNull().default(0),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const walletTransactions = pgTable("wallet_transactions", {
@@ -28,13 +17,11 @@ export const walletTransactions = pgTable("wallet_transactions", {
   walletId: uuid("wallet_id")
     .notNull()
     .references(() => wallets.id, { onDelete: "cascade" }),
-  /** credit | debit | transfer */
-  type: text("type").notNull(),
+  /** credit | debit | transfer (legacy Supabase column: transaction_type) */
+  type: text("transaction_type").notNull(),
   amount: integer("amount").notNull(),
   description: text("description").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const subscriptionPlans = pgTable("subscription_plans", {
@@ -48,9 +35,7 @@ export const subscriptionPlans = pgTable("subscription_plans", {
   /** How many credits they get when subscribing/renewing */
   creditReward: integer("credit_reward").notNull().default(0),
   isActive: integer("is_active").notNull().default(1),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const userSubscriptions = pgTable("user_subscriptions", {
@@ -66,12 +51,8 @@ export const userSubscriptions = pgTable("user_subscriptions", {
   status: text("status").notNull().default("active"),
   currentPeriodStart: timestamp("current_period_start", { withTimezone: true }).notNull(),
   currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }).notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const hubSubscriptions = pgTable("hub_subscriptions", {
@@ -87,12 +68,8 @@ export const hubSubscriptions = pgTable("hub_subscriptions", {
   status: text("status").notNull().default("active"),
   currentPeriodStart: timestamp("current_period_start", { withTimezone: true }).notNull(),
   currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }).notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const paymentIntents = pgTable("payment_intents", {
@@ -110,10 +87,6 @@ export const paymentIntents = pgTable("payment_intents", {
   providerPaymentId: text("provider_payment_id"),
   /** e.g. { type: 'subscription', planId: '...', hubId?: '...' } */
   metadata: json("metadata"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

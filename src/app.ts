@@ -20,8 +20,7 @@ app.use(
   pinoHttp({
     logger,
     autoLogging: true,
-    customReceivedMessage: (req, _res) =>
-      `${req.method} ${req.url?.split("?")[0] ?? ""} received`,
+    customReceivedMessage: (req, _res) => `${req.method} ${req.url?.split("?")[0] ?? ""} received`,
     customSuccessMessage: (req, res, _responseTime) =>
       `${req.method} ${req.url?.split("?")[0] ?? ""} ${res.statusCode}`,
     serializers: {
@@ -47,12 +46,7 @@ app.get("/", (_req, res) => {
 });
 
 /** Cover uploads: flat mount so `POST /api/uploads/book-cover` matches under Express 5. */
-app.use(
-  "/api/uploads",
-  authMiddleware,
-  apiRateLimitMiddleware,
-  uploadsRouter,
-);
+app.use("/api/uploads", authMiddleware, apiRateLimitMiddleware, uploadsRouter);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

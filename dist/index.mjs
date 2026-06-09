@@ -17068,13 +17068,7 @@ var HealthCheckResponse = objectType({
 });
 
 // lib/api-zod/src/dtos.ts
-var hubKindSchema = external_exports.enum([
-  "college",
-  "public",
-  "government",
-  "private",
-  "other"
-]);
+var hubKindSchema = external_exports.enum(["college", "public", "government", "private", "other"]);
 var registerSchema = external_exports.object({
   name: external_exports.string().min(1),
   email: external_exports.string().email(),
@@ -17088,7 +17082,11 @@ var registerSchema = external_exports.object({
   const t = data.accountType ?? "student";
   if (t !== "hub") return;
   if (!data.hubName?.trim()) {
-    ctx.addIssue({ code: external_exports.ZodIssueCode.custom, message: "Hub name is required", path: ["hubName"] });
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "Hub name is required",
+      path: ["hubName"]
+    });
   }
   if (!data.hubLocation?.trim()) {
     ctx.addIssue({
@@ -17098,7 +17096,11 @@ var registerSchema = external_exports.object({
     });
   }
   if (!data.hubKind) {
-    ctx.addIssue({ code: external_exports.ZodIssueCode.custom, message: "Hub type is required", path: ["hubKind"] });
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "Hub type is required",
+      path: ["hubKind"]
+    });
   }
 });
 var loginSchema = external_exports.object({
@@ -24295,7 +24297,7 @@ function withSupabasePgCompat(connectionString) {
 // lib/db/src/schema/index.ts
 var schema_exports = {};
 __export(schema_exports, {
-  auditLogs: () => auditLogs2,
+  auditLogs: () => auditLogs,
   bookRequestHubReassignments: () => bookRequestHubReassignments,
   bookRequests: () => bookRequests,
   books: () => books,
@@ -24322,6 +24324,8 @@ __export(schema_exports, {
 // lib/db/src/schema/rbac.ts
 var users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
+  /** Supabase Auth user id (`auth.users.id`) when linked. */
+  authUserId: uuid("auth_user_id"),
   /** Public readable ID (e.g. STD7G4K9X2Q / ADM9Q2X6T4R) */
   publicId: text("public_id").unique(),
   name: text("name").notNull(),
@@ -24509,7 +24513,7 @@ var inAppNotifications = pgTable("in_app_notifications", {
   readAt: timestamp("read_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
 });
-var auditLogs2 = pgTable("audit_logs", {
+var auditLogs = pgTable("audit_logs", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
   /** Actor who performed the action (typically same as userId; set explicitly for clarity). */
@@ -24546,8 +24550,8 @@ var wallets = pgTable("wallets", {
 var walletTransactions = pgTable("wallet_transactions", {
   id: uuid("id").primaryKey().defaultRandom(),
   walletId: uuid("wallet_id").notNull().references(() => wallets.id, { onDelete: "cascade" }),
-  /** credit | debit | transfer */
-  type: text("type").notNull(),
+  /** credit | debit | transfer (legacy Supabase column: transaction_type) */
+  type: text("transaction_type").notNull(),
   amount: integer("amount").notNull(),
   description: text("description").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
@@ -24655,9 +24659,7 @@ var bountyAcquisitions = pgTable("bounty_acquisitions", {
 // lib/db/src/db.ts
 var { Pool: Pool2 } = pg3;
 if (!process.env.DATABASE_URL) {
-  throw new Error(
-    "DATABASE_URL must be set. Did you forget to provision a database?"
-  );
+  throw new Error("DATABASE_URL must be set. Did you forget to provision a database?");
 }
 function poolConfigFromEnv() {
   const connectionString = withSupabasePgCompat(process.env.DATABASE_URL);
@@ -26083,7 +26085,7 @@ async function loadAuthUser(userId) {
   const mems = await db.select().from(memberships).where(eq(memberships.userId, userId));
   const staffMems = mems.filter((m) => isHubStaffRole(m.role));
   let hubStaffHubIds = [...new Set(staffMems.map((m) => m.hubId))];
-  let hubMemberships = staffMems.map((m) => ({
+  const hubMemberships = staffMems.map((m) => ({
     hubId: m.hubId,
     role: m.role === "hub_admin" ? "hub_admin" : "hub_user"
   }));
@@ -34827,11 +34829,7 @@ import pino from "pino";
 var isProduction = process.env.NODE_ENV === "production";
 var logger = pino({
   level: process.env.LOG_LEVEL ?? "info",
-  redact: [
-    "req.headers.authorization",
-    "req.headers.cookie",
-    "res.headers['set-cookie']"
-  ],
+  redact: ["req.headers.authorization", "req.headers.cookie", "res.headers['set-cookie']"],
   ...isProduction ? {} : {
     transport: {
       target: "pino-pretty",
@@ -35027,23 +35025,64 @@ async function ensurePublicReadableIds() {
   }
 }
 
-// src/routes/auth.ts
-import { OAuth2Client } from "google-auth-library";
-var googleClientId = () => process.env.GOOGLE_CLIENT_ID?.trim() || process.env.VITE_GOOGLE_CLIENT_ID?.trim() || "";
-var googleClient = new OAuth2Client(googleClientId());
-var googleLoginSchema = external_exports.object({
-  token: external_exports.string().min(1),
-  accountType: external_exports.enum(["student", "hub", "user", "super_admin"]).optional(),
-  hubLocation: external_exports.string().optional(),
-  hubName: external_exports.string().optional(),
-  hubKind: external_exports.string().optional()
-});
-function authDebug(message2, meta = {}) {
-  logger.info({ authFlow: true, ...meta }, message2);
+// src/lib/supabase-auth.ts
+var authClient = null;
+var adminClient = null;
+function supabaseAuthConfigured() {
+  return Boolean(
+    process.env.SUPABASE_URL?.trim() && (process.env.SUPABASE_ANON_KEY?.trim() || process.env.SUPABASE_SERVICE_ROLE_KEY?.trim())
+  );
 }
-function authFailure(message2, meta = {}) {
-  logger.warn({ authFlow: true, ...meta }, message2);
+function getSupabaseAuthClient() {
+  const url = process.env.SUPABASE_URL?.trim();
+  const anon = process.env.SUPABASE_ANON_KEY?.trim();
+  if (!url || !anon) {
+    throw new Error("SUPABASE_URL and SUPABASE_ANON_KEY are required for Supabase Auth");
+  }
+  if (!authClient) {
+    authClient = createClient(url, anon, {
+      auth: { autoRefreshToken: false, persistSession: false }
+    });
+  }
+  return authClient;
 }
+function getSupabaseAdminClient() {
+  const url = process.env.SUPABASE_URL?.trim();
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (!url || !key) {
+    throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required");
+  }
+  if (!adminClient) {
+    adminClient = createClient(url, key, {
+      auth: { autoRefreshToken: false, persistSession: false }
+    });
+  }
+  return adminClient;
+}
+async function validateSupabaseAccessToken(accessToken) {
+  const admin = getSupabaseAdminClient();
+  const { data, error } = await admin.auth.getUser(accessToken);
+  if (error || !data.user) {
+    throw new Error(error?.message ?? "Invalid Supabase session");
+  }
+  return data.user;
+}
+async function signInWithGoogleIdToken(idToken) {
+  const client = getSupabaseAuthClient();
+  const { data, error } = await client.auth.signInWithIdToken({
+    provider: "google",
+    token: idToken
+  });
+  if (error || !data.user) {
+    throw new Error(error?.message ?? "Google sign-in failed");
+  }
+  return {
+    user: data.user,
+    isNewUser: Boolean(data.user.created_at && data.session)
+  };
+}
+
+// src/lib/phygital-user-from-supabase.ts
 function normalizeAccountType(accountType) {
   if (accountType === "hub") return "hub";
   if (accountType === "super_admin") return "super_admin";
@@ -35054,7 +35093,235 @@ function baseRoleForAccountType(accountType) {
   if (accountType === "hub") return "hub";
   return "user";
 }
+async function linkAuthUserId(userId, authUserId) {
+  await db.update(users).set({ authUserId }).where(eq(users.id, userId));
+}
+async function provisionNewPhygitalUser(authUser, meta) {
+  const email = authUser.email.toLowerCase();
+  const name = meta.name?.trim() || (typeof authUser.user_metadata?.full_name === "string" ? authUser.user_metadata.full_name : typeof authUser.user_metadata?.name === "string" ? authUser.user_metadata.name : email.split("@")[0]);
+  const passwordHash = await hashPassword(crypto.randomUUID() + "supabase-auth");
+  const actualAccountType = normalizeAccountType(meta.accountType);
+  const baseRole = baseRoleForAccountType(actualAccountType);
+  return db.transaction(async (tx) => {
+    const [row] = await tx.insert(users).values({
+      id: authUser.id,
+      authUserId: authUser.id,
+      name,
+      email,
+      passwordHash,
+      baseRole,
+      publicId: await nextUserPublicId(baseRole)
+    }).returning({ id: users.id });
+    await tx.insert(subscriptions).values({
+      userId: row.id,
+      status: "canceled",
+      premiumUntil: /* @__PURE__ */ new Date(0)
+    });
+    await tx.insert(wallets).values({
+      userId: row.id,
+      balance: 5e3
+    });
+    const [freePlan] = await tx.select().from(subscriptionPlans).where(eq(subscriptionPlans.tier, "free")).limit(1);
+    if (freePlan) {
+      await tx.insert(userSubscriptions).values({
+        userId: row.id,
+        planId: freePlan.id,
+        status: "active",
+        currentPeriodStart: /* @__PURE__ */ new Date(),
+        currentPeriodEnd: new Date((/* @__PURE__ */ new Date()).setFullYear((/* @__PURE__ */ new Date()).getFullYear() + 10))
+      });
+    }
+    if (actualAccountType === "hub" || actualAccountType === "super_admin" && meta.hubName) {
+      const hName = meta.hubName?.trim() || name;
+      const hLocation = meta.hubLocation?.trim() || "Unknown";
+      const hKind = meta.hubKind || "college";
+      const [hub] = await tx.insert(hubs).values({
+        name: hName,
+        location: hLocation,
+        kind: hKind,
+        publicId: await nextHubPublicId()
+      }).returning({ id: hubs.id });
+      await tx.insert(memberships).values({
+        userId: row.id,
+        hubId: hub.id,
+        role: "hub_admin"
+      });
+    } else if (actualAccountType === "student" && meta.hubLocation) {
+      const hubLoc = meta.hubLocation.trim();
+      let [hub] = await tx.select().from(hubs).where(eq(hubs.publicId, hubLoc)).limit(1);
+      if (!hub) {
+        [hub] = await tx.select().from(hubs).where(eq(hubs.location, hubLoc)).limit(1);
+      }
+      if (hub) {
+        await tx.insert(memberships).values({
+          userId: row.id,
+          hubId: hub.id,
+          role: "student"
+        });
+      }
+    }
+    return row.id;
+  });
+}
+async function resolvePhygitalUserId(authUser, meta = {}) {
+  if (!authUser.email) {
+    throw new Error("Supabase user has no email");
+  }
+  const email = authUser.email.toLowerCase();
+  const [byAuthId] = await db.select({ id: users.id }).from(users).where(eq(users.authUserId, authUser.id)).limit(1);
+  if (byAuthId) {
+    return { userId: byAuthId.id, isNewUser: false };
+  }
+  const [byEmail] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  if (byEmail) {
+    await linkAuthUserId(byEmail.id, authUser.id);
+    return { userId: byEmail.id, isNewUser: false };
+  }
+  const [byId] = await db.select().from(users).where(eq(users.id, authUser.id)).limit(1);
+  if (byId) {
+    await linkAuthUserId(byId.id, authUser.id);
+    return { userId: byId.id, isNewUser: false };
+  }
+  const userId = await provisionNewPhygitalUser(authUser, meta);
+  return { userId, isNewUser: true };
+}
+
+// src/routes/auth.ts
+var googleLoginSchema = external_exports.object({
+  /** Supabase Auth session access_token (after signInWithOAuth / signInWithPassword). Preferred. */
+  accessToken: external_exports.string().min(1).optional(),
+  /** @deprecated Send `accessToken` from the Supabase client instead. Optional Google id_token for signInWithIdToken. */
+  token: external_exports.string().min(1).optional(),
+  accountType: external_exports.enum(["student", "hub", "user", "super_admin"]).optional(),
+  hubLocation: external_exports.string().optional(),
+  hubName: external_exports.string().optional(),
+  hubKind: external_exports.string().optional()
+}).refine((d) => Boolean(d.accessToken?.trim() || d.token?.trim()), {
+  message: "accessToken or token is required"
+});
+function authDebug(message2, meta = {}) {
+  logger.info({ authFlow: true, ...meta }, message2);
+}
+function authFailure(message2, meta = {}) {
+  logger.warn({ authFlow: true, ...meta }, message2);
+}
 var router2 = Router2();
+function useSupabaseAuth() {
+  return supabaseAuthConfigured() && Boolean(process.env.SUPABASE_ANON_KEY?.trim());
+}
+async function tryLegacyEmailLogin(email, password) {
+  const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  authDebug("legacy email login user lookup completed", {
+    email,
+    found: Boolean(user),
+    userId: user?.id,
+    baseRole: user?.baseRole,
+    accountStatus: user?.accountStatus,
+    hasPasswordHash: Boolean(user?.passwordHash)
+  });
+  const passwordOk = Boolean(
+    user?.passwordHash && await verifyPassword(password, user.passwordHash)
+  );
+  if (!user || !passwordOk) {
+    authFailure("legacy email login invalid credentials", { email, found: Boolean(user) });
+    return { ok: false, status: 401, error: "Invalid credentials" };
+  }
+  const authUser = await loadAuthUser(user.id);
+  if (!authUser) {
+    authFailure("legacy email login blocked by account status or missing auth user", {
+      email,
+      userId: user.id,
+      accountStatus: user.accountStatus
+    });
+    return {
+      ok: false,
+      status: 403,
+      error: "Account is currently restricted. Contact support."
+    };
+  }
+  const token = await signToken(authUser);
+  authDebug("legacy email login jwt generated", {
+    email,
+    userId: authUser.userId,
+    baseRole: authUser.baseRole,
+    tokenIssued: true
+  });
+  return { ok: true, token, user: authUser };
+}
+async function issueAppTokens(res, userId, isNewUser) {
+  const authUser = await loadAuthUser(userId);
+  if (!authUser) {
+    res.status(403).json({ error: "Account is currently restricted. Contact support." });
+    return;
+  }
+  const token = await signToken(authUser);
+  res.status(isNewUser ? 201 : 200).json({ token, user: authUser });
+}
+function provisionMetaFromBody(data) {
+  return {
+    accountType: data.accountType,
+    hubLocation: data.hubLocation,
+    hubName: data.hubName,
+    hubKind: data.hubKind
+  };
+}
+async function exchangeSupabaseCredentials(res, opts) {
+  let sbUser;
+  let isNewUser = false;
+  if (opts.accessToken?.trim()) {
+    sbUser = await validateSupabaseAccessToken(opts.accessToken.trim());
+  } else if (opts.googleIdToken?.trim()) {
+    const result = await signInWithGoogleIdToken(opts.googleIdToken.trim());
+    sbUser = result.user;
+    isNewUser = result.isNewUser;
+  } else {
+    res.status(400).json({ error: "accessToken or token is required" });
+    return;
+  }
+  const { userId, isNewUser: provisionedNew } = await resolvePhygitalUserId(sbUser, opts.meta);
+  await issueAppTokens(res, userId, isNewUser || provisionedNew);
+}
+router2.get("/config", (_req, res) => {
+  const supabase = useSupabaseAuth();
+  res.json({
+    mode: supabase ? "supabase" : "legacy",
+    email: true,
+    google: supabase ? "supabase_oauth" : "unavailable",
+    sessionExchangePath: "/api/auth/session",
+    googleExchangePath: "/api/auth/google",
+    supabaseUrl: supabase ? process.env.SUPABASE_URL?.trim() : void 0,
+    useGoogleSignInButton: false
+  });
+});
+var sessionSchema = external_exports.object({
+  accessToken: external_exports.string().min(1),
+  accountType: external_exports.enum(["student", "hub", "user", "super_admin"]).optional(),
+  hubLocation: external_exports.string().optional(),
+  hubName: external_exports.string().optional(),
+  hubKind: external_exports.string().optional()
+});
+router2.post("/session", async (req, res) => {
+  const parsed = sessionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid session payload" });
+    return;
+  }
+  if (!useSupabaseAuth()) {
+    res.status(503).json({ error: "Supabase Auth is not configured on the API" });
+    return;
+  }
+  try {
+    const sbUser = await validateSupabaseAccessToken(parsed.data.accessToken);
+    const meta = provisionMetaFromBody(parsed.data);
+    const { userId, isNewUser } = await resolvePhygitalUserId(sbUser, meta);
+    await issueAppTokens(res, userId, isNewUser);
+  } catch (error) {
+    authFailure("supabase session exchange failed", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+    res.status(401).json({ error: "Invalid or expired sign-in session" });
+  }
+});
 router2.post("/register", async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -35064,10 +35331,53 @@ router2.post("/register", async (req, res) => {
   const { name, email, password } = parsed.data;
   const isPremium = parsed.data.isPremium;
   if (isPremium) {
-    res.status(400).json({ error: "Premium subscriptions will be available soon.\nOnline payment integration is currently under development.\nPlease register using the Free plan." });
+    res.status(400).json({
+      error: "Premium subscriptions will be available soon.\nOnline payment integration is currently under development.\nPlease register using the Free plan."
+    });
     return;
   }
   const accountType = parsed.data.accountType ?? "student";
+  if (useSupabaseAuth()) {
+    try {
+      const { data, error } = await getSupabaseAuthClient().auth.signUp({
+        email,
+        password,
+        options: {
+          data: { name, full_name: name }
+        }
+      });
+      if (error) {
+        const lower = error.message.toLowerCase();
+        if (lower.includes("rate limit")) {
+          authDebug("supabase signUp rate limited; falling back to app registration", { email });
+        } else {
+          const msg = lower.includes("already") ? "Email already registered" : error.message;
+          res.status(lower.includes("already") ? 409 : 400).json({ error: msg });
+          return;
+        }
+      } else if (!data.user) {
+        res.status(500).json({ error: "Supabase sign-up did not return a user" });
+        return;
+      } else {
+        const meta = {
+          name,
+          accountType,
+          hubLocation: parsed.data.hubLocation,
+          hubName: parsed.data.hubName,
+          hubKind: parsed.data.hubKind
+        };
+        const { userId, isNewUser } = await resolvePhygitalUserId(data.user, meta);
+        await issueAppTokens(res, userId, isNewUser);
+        return;
+      }
+    } catch (error) {
+      authFailure("supabase register failed", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      res.status(500).json({ error: "Registration failed" });
+      return;
+    }
+  }
   const existing = await db.select().from(users).where(eq(users.email, email)).limit(1);
   if (existing.length > 0) {
     res.status(409).json({ error: "Email already registered" });
@@ -35082,7 +35392,9 @@ router2.post("/register", async (req, res) => {
         email,
         passwordHash,
         baseRole: accountType === "super_admin" ? "super_admin" : accountType === "hub" ? "hub" : "user",
-        publicId: await nextUserPublicId(accountType === "super_admin" ? "super_admin" : accountType === "hub" ? "hub" : "user")
+        publicId: await nextUserPublicId(
+          accountType === "super_admin" ? "super_admin" : accountType === "hub" ? "hub" : "user"
+        )
       }).returning({ id: users.id });
       const isPremium2 = parsed.data.isPremium;
       const until = /* @__PURE__ */ new Date();
@@ -35168,43 +35480,36 @@ router2.post("/login", async (req, res) => {
     return;
   }
   const email = parsed.data.email.toLowerCase();
-  authDebug("email login request received", { email });
-  try {
-    const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
-    authDebug("email login user lookup completed", {
-      email,
-      found: Boolean(user),
-      userId: user?.id,
-      baseRole: user?.baseRole,
-      accountStatus: user?.accountStatus,
-      hasPasswordHash: Boolean(user?.passwordHash)
-    });
-    const passwordOk = Boolean(
-      user?.passwordHash && await verifyPassword(parsed.data.password, user.passwordHash)
-    );
-    if (!user || !passwordOk) {
-      authFailure("email login invalid credentials", { email, found: Boolean(user) });
-      res.status(401).json({ error: "Invalid credentials" });
-      return;
-    }
-    const authUser = await loadAuthUser(user.id);
-    if (!authUser) {
-      authFailure("email login blocked by account status or missing auth user", {
+  authDebug("email login request received", { email, supabaseAuth: useSupabaseAuth() });
+  if (useSupabaseAuth()) {
+    try {
+      const { data, error } = await getSupabaseAuthClient().auth.signInWithPassword({
         email,
-        userId: user.id,
-        accountStatus: user.accountStatus
+        password: parsed.data.password
       });
-      res.status(403).json({ error: "Account is currently restricted. Contact support." });
+      if (!error && data.user) {
+        const { userId } = await resolvePhygitalUserId(data.user);
+        await issueAppTokens(res, userId, false);
+        return;
+      }
+      authDebug("supabase email login rejected; trying legacy app password", {
+        email,
+        message: error?.message
+      });
+    } catch (error) {
+      authFailure("supabase email login failed; trying legacy app password", {
+        email,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  try {
+    const legacy = await tryLegacyEmailLogin(email, parsed.data.password);
+    if (!legacy.ok) {
+      res.status(legacy.status).json({ error: legacy.error });
       return;
     }
-    const token = await signToken(authUser);
-    authDebug("email login jwt generated", {
-      email,
-      userId: authUser.userId,
-      baseRole: authUser.baseRole,
-      tokenIssued: true
-    });
-    res.json({ token, user: authUser });
+    res.json({ token: legacy.token, user: legacy.user });
   } catch (error) {
     authFailure("email login failed unexpectedly", {
       email,
@@ -35218,156 +35523,42 @@ router2.post("/google", async (req, res) => {
   if (!parsed.success) {
     authFailure("google login validation failed", {
       issues: parsed.error.issues.map((issue) => ({ path: issue.path, code: issue.code })),
+      hasAccessToken: typeof req.body?.accessToken === "string",
       hasToken: typeof req.body?.token === "string",
       accountType: req.body?.accountType
     });
     res.status(400).json({ error: "Invalid Google login data" });
     return;
   }
-  const { token, accountType, hubLocation, hubName, hubKind } = parsed.data;
-  const audience = googleClientId();
-  if (!audience) {
-    authFailure("google login missing client id configuration");
-    res.status(500).json({ error: "Google authentication is not configured" });
+  if (!useSupabaseAuth()) {
+    authFailure("google login requires Supabase Auth");
+    res.status(503).json({
+      error: "Google sign-in uses Supabase Auth. Set SUPABASE_URL and SUPABASE_ANON_KEY on the API, enable Google in Supabase Dashboard, and sign in with supabase.auth.signInWithOAuth({ provider: 'google' })."
+    });
     return;
   }
+  const { accessToken, token, accountType, hubLocation, hubName, hubKind } = parsed.data;
   authDebug("google login request received", {
     accountType,
     hasHubLocation: Boolean(hubLocation),
     hasHubName: Boolean(hubName),
     hubKind,
-    tokenLength: token.length
+    viaAccessToken: Boolean(accessToken?.trim()),
+    viaIdToken: Boolean(token?.trim() && !accessToken?.trim())
   });
   try {
-    const ticket = await googleClient.verifyIdToken({
-      idToken: token,
-      audience
+    await exchangeSupabaseCredentials(res, {
+      accessToken,
+      googleIdToken: accessToken ? void 0 : token,
+      meta: provisionMetaFromBody({ accountType, hubLocation, hubName, hubKind })
     });
-    const payload = ticket.getPayload();
-    if (!payload || !payload.email) {
-      authFailure("google login invalid payload", {
-        hasPayload: Boolean(payload),
-        audience: payload?.aud,
-        issuer: payload?.iss
-      });
-      res.status(400).json({ error: "Invalid Google payload" });
-      return;
-    }
-    if (payload.email_verified === false) {
-      authFailure("google login rejected unverified email", { email: payload.email });
-      res.status(401).json({ error: "Google email is not verified" });
-      return;
-    }
-    const email = payload.email.toLowerCase();
-    const name = payload.name || email.split("@")[0];
-    authDebug("google token verified", {
-      email,
-      audience: payload.aud,
-      issuer: payload.iss,
-      emailVerified: payload.email_verified
-    });
-    let [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
-    authDebug("google login user lookup completed", {
-      email,
-      found: Boolean(user),
-      userId: user?.id,
-      baseRole: user?.baseRole,
-      accountStatus: user?.accountStatus
-    });
-    let userId = user?.id;
-    let isNewUser = false;
-    if (!user) {
-      const passwordHash = await hashPassword(Math.random().toString(36).slice(-8) + "google!");
-      const actualAccountType = normalizeAccountType(accountType);
-      userId = await db.transaction(async (tx) => {
-        const [row] = await tx.insert(users).values({
-          name,
-          email,
-          passwordHash,
-          baseRole: baseRoleForAccountType(actualAccountType),
-          publicId: await nextUserPublicId(baseRoleForAccountType(actualAccountType))
-        }).returning({ id: users.id });
-        await tx.insert(subscriptions).values({
-          userId: row.id,
-          status: "canceled",
-          premiumUntil: /* @__PURE__ */ new Date(0)
-        });
-        await tx.insert(wallets).values({
-          userId: row.id,
-          balance: 5e3
-        });
-        const [freePlan] = await tx.select().from(subscriptionPlans).where(eq(subscriptionPlans.tier, "free")).limit(1);
-        if (freePlan) {
-          await tx.insert(userSubscriptions).values({
-            userId: row.id,
-            planId: freePlan.id,
-            status: "active",
-            currentPeriodStart: /* @__PURE__ */ new Date(),
-            currentPeriodEnd: new Date((/* @__PURE__ */ new Date()).setFullYear((/* @__PURE__ */ new Date()).getFullYear() + 10))
-          });
-        }
-        if (actualAccountType === "hub" || actualAccountType === "super_admin" && hubName) {
-          const hName = hubName?.trim() || name;
-          const hLocation = hubLocation?.trim() || "Unknown";
-          const hKind = hubKind || "college";
-          const [hub] = await tx.insert(hubs).values({
-            name: hName,
-            location: hLocation,
-            kind: hKind,
-            publicId: await nextHubPublicId()
-          }).returning({ id: hubs.id });
-          await tx.insert(memberships).values({
-            userId: row.id,
-            hubId: hub.id,
-            role: "hub_admin"
-          });
-        } else if (actualAccountType === "student" && hubLocation) {
-          const hubLoc = hubLocation.trim();
-          let [hub] = await tx.select().from(hubs).where(eq(hubs.publicId, hubLoc)).limit(1);
-          if (!hub) {
-            [hub] = await tx.select().from(hubs).where(eq(hubs.location, hubLoc)).limit(1);
-          }
-          if (hub) {
-            await tx.insert(memberships).values({
-              userId: row.id,
-              hubId: hub.id,
-              role: "student"
-            });
-          }
-        }
-        return row.id;
-      });
-      isNewUser = true;
-      authDebug("google login created user", {
-        email,
-        userId,
-        accountType: actualAccountType
-      });
-    }
-    const authUser = await loadAuthUser(userId);
-    if (!authUser) {
-      authFailure("google login blocked by account status or missing auth user", {
-        email,
-        userId,
-        accountStatus: user?.accountStatus
-      });
-      res.status(403).json({ error: "Account restricted." });
-      return;
-    }
-    const jwtToken = await signToken(authUser);
-    authDebug("google login jwt generated", {
-      email,
-      userId: authUser.userId,
-      baseRole: authUser.baseRole,
-      isNewUser,
-      tokenIssued: true
-    });
-    res.status(isNewUser ? 201 : 200).json({ token: jwtToken, user: authUser });
   } catch (error) {
-    authFailure("google login verification failed", {
+    authFailure("supabase google login failed", {
       error: error instanceof Error ? error.message : String(error)
     });
-    res.status(401).json({ error: "Google authentication failed" });
+    res.status(401).json({
+      error: "Google sign-in failed. Use Supabase OAuth on the client, then POST accessToken to /api/auth/session or /api/auth/google."
+    });
   }
 });
 router2.get("/me", authMiddleware, requireAuth, async (req, res) => {
@@ -36017,16 +36208,13 @@ async function tryAssignAvailableCopiesForDeskTitle(tx, hubId, bookTitle, opts) 
 }
 async function sweepDeskWaitingAssignments(hubScope) {
   if (hubScope.length === 0) return { processed: 0, linked: 0 };
-  const rows = await db.select().from(bookRequests).where(
-    and(
-      inArray(bookRequests.hubId, hubScope),
-      eq(bookRequests.status, "pending")
-    )
-  ).orderBy(asc(bookRequests.createdAt));
+  const rows = await db.select().from(bookRequests).where(and(inArray(bookRequests.hubId, hubScope), eq(bookRequests.status, "pending"))).orderBy(asc(bookRequests.createdAt));
   let linked = 0;
   for (const r of rows) {
+    const hubId = r.hubId;
+    if (!hubId) continue;
     const out = await db.transaction(async (tx) => {
-      return tryAssignAvailableCopiesForDeskTitle(tx, r.hubId, r.bookTitle, {
+      return tryAssignAvailableCopiesForDeskTitle(tx, hubId, r.bookTitle, {
         preferRequestId: r.id,
         preferOnly: true
       });
@@ -36700,7 +36888,9 @@ router4.patch("/:bookId", authMiddleware, requireAuth, async (req, res) => {
       return;
     }
     if (err.message === "RESERVED_NO_MANUAL_CHECKOUT") {
-      res.status(409).json({ error: "Reserved copies cannot be checked out manually. Record pickup via request." });
+      res.status(409).json({
+        error: "Reserved copies cannot be checked out manually. Record pickup via request."
+      });
       return;
     }
     throw e;
@@ -36748,11 +36938,7 @@ function isValidStaffBookRequestTransition(from, to) {
   if (from === "pending" && to === "cancelled") return true;
   return false;
 }
-var P2P_FORWARD = [
-  "listed",
-  "pending_dropoff",
-  "available"
-];
+var P2P_FORWARD = ["listed", "pending_dropoff", "available"];
 function isValidP2pLinearStep(from, to) {
   const i = P2P_FORWARD.indexOf(from);
   const j = P2P_FORWARD.indexOf(to);
@@ -37055,7 +37241,7 @@ router5.post("/", authMiddleware, requireAuth, async (req, res) => {
   const bookTitle = parsed.data.bookTitle;
   const author = normalizeOptionalText(parsed.data.author);
   const isbn = normalizeOptionalText(parsed.data.isbn);
-  const notes = normalizeOptionalText(parsed.data.notes);
+  void normalizeOptionalText(parsed.data.notes);
   const [{ activeCount }] = await db.select({ activeCount: count() }).from(bookRequests).where(
     and(
       eq(bookRequests.userId, auth.userId),
@@ -37244,7 +37430,9 @@ router5.get("/hub", authMiddleware, requireAuth, async (req, res) => {
   ).orderBy(desc(bookRequests.updatedAt));
   const withMeta = await withReassignMeta(rows);
   const userIds = [...new Set(withMeta.map((r) => r.userId))];
-  const copyIds = [...new Set(withMeta.map((r) => r.assignedCopyId).filter((v) => !!v))];
+  const copyIds = [
+    ...new Set(withMeta.map((r) => r.assignedCopyId).filter((v) => !!v))
+  ];
   const userRows = userIds.length > 0 ? await db.select({ id: users.id, publicId: users.publicId }).from(users).where(inArray(users.id, userIds)) : [];
   const copyRows = copyIds.length > 0 ? await db.select({ id: books.id, refId: books.refId }).from(books).where(inArray(books.id, copyIds)) : [];
   const userPublicIdById = new Map(userRows.map((u) => [u.id, u.publicId ?? null]));
@@ -37357,7 +37545,6 @@ router5.post("/:id/claim", authMiddleware, requireAuth, async (req, res) => {
     throw e;
   }
   const hubLabel = await hubNameById(parsed.data.hubId);
-  const titleLabel = row.bookTitle?.trim() || "your requested book";
   await notifyUser({
     userId: row.userId,
     kind: "book_request_available",
@@ -38530,6 +38717,7 @@ async function computeHubAttentionRanks(hubIds) {
   }
   const reqRows = await db.select({ hubId: bookRequests.hubId, status: bookRequests.status, n: count() }).from(bookRequests).where(inArray(bookRequests.hubId, hubIds)).groupBy(bookRequests.hubId, bookRequests.status);
   for (const row of reqRows) {
+    if (!row.hubId) continue;
     const a = byHub.get(row.hubId);
     if (!a) continue;
     const n = Number(row.n);
@@ -38652,12 +38840,7 @@ async function buildHubOverviewPayload(hubIds, hubIdFilter, range) {
     )
   );
   const activeRequests = Number(activeRequestsRows[0]?.n ?? 0);
-  const pendingRequestsRows = await db.select({ n: count() }).from(bookRequests).where(
-    and(
-      inArray(bookRequests.hubId, effective),
-      eq(bookRequests.status, "pending")
-    )
-  );
+  const pendingRequestsRows = await db.select({ n: count() }).from(bookRequests).where(and(inArray(bookRequests.hubId, effective), eq(bookRequests.status, "pending")));
   const pendingRequests = Number(pendingRequestsRows[0]?.n ?? 0);
   const readyPickupRows = await db.select({ n: count() }).from(bookRequests).where(
     and(
@@ -38666,32 +38849,27 @@ async function buildHubOverviewPayload(hubIds, hubIdFilter, range) {
     )
   );
   const readyForPickup = Number(readyPickupRows[0]?.n ?? 0);
-  const fulfilledTodayRows = await db.select({ n: count() }).from(auditLogs2).where(
+  const fulfilledTodayRows = await db.select({ n: count() }).from(auditLogs).where(
     and(
-      inArray(auditLogs2.hubId, effective),
-      eq(auditLogs2.action, "BOOK_REQUEST_STATUS"),
-      sql`(${auditLogs2.meta}->>'to') = 'available_for_collection'`,
-      gte(auditLogs2.createdAt, dayStart),
-      eq(auditLogs2.denial, false)
+      inArray(auditLogs.hubId, effective),
+      eq(auditLogs.action, "BOOK_REQUEST_STATUS"),
+      sql`(${auditLogs.meta}->>'to') = 'available_for_collection'`,
+      gte(auditLogs.createdAt, dayStart),
+      eq(auditLogs.denial, false)
     )
   );
   const fulfilledRequestsToday = Number(fulfilledTodayRows[0]?.n ?? 0);
-  const fulfilledPeriodRows = await db.select({ n: count() }).from(auditLogs2).where(
+  const fulfilledPeriodRows = await db.select({ n: count() }).from(auditLogs).where(
     and(
-      inArray(auditLogs2.hubId, effective),
-      eq(auditLogs2.action, "BOOK_REQUEST_STATUS"),
-      sql`(${auditLogs2.meta}->>'to') = 'available_for_collection'`,
-      gte(auditLogs2.createdAt, periodStart),
-      eq(auditLogs2.denial, false)
+      inArray(auditLogs.hubId, effective),
+      eq(auditLogs.action, "BOOK_REQUEST_STATUS"),
+      sql`(${auditLogs.meta}->>'to') = 'available_for_collection'`,
+      gte(auditLogs.createdAt, periodStart),
+      eq(auditLogs.denial, false)
     )
   );
   const fulfilledRequestsInRange = Number(fulfilledPeriodRows[0]?.n ?? 0);
-  const p2pPendingRows = await db.select({ n: count() }).from(p2pListings).where(
-    and(
-      inArray(p2pListings.hubId, effective),
-      eq(p2pListings.status, "pending_dropoff")
-    )
-  );
+  const p2pPendingRows = await db.select({ n: count() }).from(p2pListings).where(and(inArray(p2pListings.hubId, effective), eq(p2pListings.status, "pending_dropoff")));
   const p2pPending = Number(p2pPendingRows[0]?.n ?? 0);
   const p2pOnShelfRows = await db.select({ n: count() }).from(p2pListings).where(
     and(
@@ -38702,28 +38880,28 @@ async function buildHubOverviewPayload(hubIds, hubIdFilter, range) {
   const p2pOnShelf = Number(p2pOnShelfRows[0]?.n ?? 0);
   const hubListingIdRows = await db.select({ id: p2pListings.id }).from(p2pListings).where(inArray(p2pListings.hubId, effective));
   const hubListingIds = hubListingIdRows.map((r) => r.id);
-  const hubOrListingClause = hubListingIds.length === 0 ? inArray(auditLogs2.hubId, effective) : or(
-    inArray(auditLogs2.hubId, effective),
+  const hubOrListingClause = hubListingIds.length === 0 ? inArray(auditLogs.hubId, effective) : or(
+    inArray(auditLogs.hubId, effective),
     and(
-      eq(auditLogs2.resourceType, "p2p_listing"),
-      inArray(auditLogs2.resourceId, hubListingIds)
+      eq(auditLogs.resourceType, "p2p_listing"),
+      inArray(auditLogs.resourceId, hubListingIds)
     )
   );
-  const transactionsTodayRows = await db.select({ n: count() }).from(auditLogs2).where(
+  const transactionsTodayRows = await db.select({ n: count() }).from(auditLogs).where(
     and(
       hubOrListingClause,
-      inArray(auditLogs2.action, [...TRANSACTION_ACTIONS]),
-      gte(auditLogs2.createdAt, dayStart),
-      eq(auditLogs2.denial, false)
+      inArray(auditLogs.action, [...TRANSACTION_ACTIONS]),
+      gte(auditLogs.createdAt, dayStart),
+      eq(auditLogs.denial, false)
     )
   );
   const transactionsToday = Number(transactionsTodayRows[0]?.n ?? 0);
-  const transactionsPeriodRows = await db.select({ n: count() }).from(auditLogs2).where(
+  const transactionsPeriodRows = await db.select({ n: count() }).from(auditLogs).where(
     and(
       hubOrListingClause,
-      inArray(auditLogs2.action, [...TRANSACTION_ACTIONS]),
-      gte(auditLogs2.createdAt, periodStart),
-      eq(auditLogs2.denial, false)
+      inArray(auditLogs.action, [...TRANSACTION_ACTIONS]),
+      gte(auditLogs.createdAt, periodStart),
+      eq(auditLogs.denial, false)
     )
   );
   const transactionsInRange = Number(transactionsPeriodRows[0]?.n ?? 0);
@@ -38772,12 +38950,7 @@ async function buildHubOverviewPayload(hubIds, hubIdFilter, range) {
     status: p2pListings.status,
     price: p2pListings.price,
     updatedAt: p2pListings.updatedAt
-  }).from(p2pListings).where(
-    and(
-      inArray(p2pListings.hubId, effective),
-      eq(p2pListings.status, "pending_dropoff")
-    )
-  ).orderBy(desc(p2pListings.updatedAt)).limit(100);
+  }).from(p2pListings).where(and(inArray(p2pListings.hubId, effective), eq(p2pListings.status, "pending_dropoff"))).orderBy(desc(p2pListings.updatedAt)).limit(100);
   const onShelfListings = await db.select({
     id: p2pListings.id,
     bookTitle: p2pListings.bookTitle,
@@ -38839,20 +39012,30 @@ async function buildHubOverviewPayload(hubIds, hubIdFilter, range) {
   const bountyPendingDeliveryRows = await db.select({ n: count() }).from(bountySubmissions).innerJoin(bountyRequests, eq(bountySubmissions.bountyRequestId, bountyRequests.id)).where(
     and(
       inArray(bountyRequests.hubId, effective),
-      inArray(bountySubmissions.status, ["submitted", "awaiting_drop_off", "delivered", "under_review"])
+      inArray(bountySubmissions.status, [
+        "submitted",
+        "awaiting_drop_off",
+        "delivered",
+        "under_review"
+      ])
     )
   );
   const bountyPendingDeliveries = Number(bountyPendingDeliveryRows[0]?.n ?? 0);
   const bountyAcquiredRows = await db.select({ n: count() }).from(bountyAcquisitions).innerJoin(bountyRequests, eq(bountyAcquisitions.bountyRequestId, bountyRequests.id)).where(inArray(bountyRequests.hubId, effective));
   const bountyBooksAcquired = Number(bountyAcquiredRows[0]?.n ?? 0);
-  const bountyFulfilledRows = await db.select({ n: count() }).from(bountyRequests).where(
-    and(inArray(bountyRequests.hubId, effective), eq(bountyRequests.status, "completed"))
-  );
+  const bountyFulfilledRows = await db.select({ n: count() }).from(bountyRequests).where(and(inArray(bountyRequests.hubId, effective), eq(bountyRequests.status, "completed")));
   const bountyFulfilledRequests = Number(bountyFulfilledRows[0]?.n ?? 0);
-  const bountyRewardRows = await db.select({ total: sql`coalesce(sum(${bountyRequests.rewardAmount} * ${bountyRequests.quantity}), 0)` }).from(bountyRequests).where(
+  const bountyRewardRows = await db.select({
+    total: sql`coalesce(sum(${bountyRequests.rewardAmount} * ${bountyRequests.quantity}), 0)`
+  }).from(bountyRequests).where(
     and(
       inArray(bountyRequests.hubId, effective),
-      inArray(bountyRequests.status, ["open", "pending_student_delivery", "under_review", "approved"])
+      inArray(bountyRequests.status, [
+        "open",
+        "pending_student_delivery",
+        "under_review",
+        "approved"
+      ])
     )
   );
   const bountyTotalRewardValue = Number(bountyRewardRows[0]?.total ?? 0);
@@ -38982,8 +39165,7 @@ var OUTBOUND_ACTIONS = [
 var uuidParam = external_exports.string().uuid();
 function titleForRow(resourceType, resourceId, titleByBookId, titleByListingId) {
   if (resourceType === "book" && resourceId) return titleByBookId.get(resourceId) ?? null;
-  if (resourceType === "p2p_listing" && resourceId)
-    return titleByListingId.get(resourceId) ?? null;
+  if (resourceType === "p2p_listing" && resourceId) return titleByListingId.get(resourceId) ?? null;
   return null;
 }
 function inboundSummary(action, title) {
@@ -39030,42 +39212,42 @@ async function buildHubCommercePayload(hubStaffHubIds, hubIdFilter, hubAccountUs
   const hubLabelById = new Map(hubMetaRows.map((h) => [h.id, h.name]));
   const hubListingIdRows = await db.select({ id: p2pListings.id }).from(p2pListings).where(inArray(p2pListings.hubId, effective));
   const hubListingIds = hubListingIdRows.map((r) => r.id);
-  const hubOrListingClause = hubListingIds.length === 0 ? inArray(auditLogs2.hubId, effective) : or(
-    inArray(auditLogs2.hubId, effective),
+  const hubOrListingClause = hubListingIds.length === 0 ? inArray(auditLogs.hubId, effective) : or(
+    inArray(auditLogs.hubId, effective),
     and(
-      eq(auditLogs2.resourceType, "p2p_listing"),
-      inArray(auditLogs2.resourceId, hubListingIds)
+      eq(auditLogs.resourceType, "p2p_listing"),
+      inArray(auditLogs.resourceId, hubListingIds)
     )
   );
   const inboundWhere = and(
     hubOrListingClause,
-    inArray(auditLogs2.action, [...INBOUND_ACTIONS]),
-    eq(auditLogs2.denial, false),
-    sql`${auditLogs2.userId} IS DISTINCT FROM ${hubAccountUserId}::uuid`
+    inArray(auditLogs.action, [...INBOUND_ACTIONS]),
+    eq(auditLogs.denial, false),
+    sql`${auditLogs.userId} IS DISTINCT FROM ${hubAccountUserId}::uuid`
   );
   const inboundRows = await db.select({
-    id: auditLogs2.id,
-    action: auditLogs2.action,
-    resourceType: auditLogs2.resourceType,
-    resourceId: auditLogs2.resourceId,
-    hubId: auditLogs2.hubId,
-    userId: auditLogs2.userId,
-    createdAt: auditLogs2.createdAt
-  }).from(auditLogs2).where(inboundWhere).orderBy(desc(auditLogs2.createdAt)).limit(limit);
+    id: auditLogs.id,
+    action: auditLogs.action,
+    resourceType: auditLogs.resourceType,
+    resourceId: auditLogs.resourceId,
+    hubId: auditLogs.hubId,
+    userId: auditLogs.userId,
+    createdAt: auditLogs.createdAt
+  }).from(auditLogs).where(inboundWhere).orderBy(desc(auditLogs.createdAt)).limit(limit);
   const outboundRows = await db.select({
-    id: auditLogs2.id,
-    action: auditLogs2.action,
-    resourceType: auditLogs2.resourceType,
-    resourceId: auditLogs2.resourceId,
-    hubId: auditLogs2.hubId,
-    createdAt: auditLogs2.createdAt
-  }).from(auditLogs2).where(
+    id: auditLogs.id,
+    action: auditLogs.action,
+    resourceType: auditLogs.resourceType,
+    resourceId: auditLogs.resourceId,
+    hubId: auditLogs.hubId,
+    createdAt: auditLogs.createdAt
+  }).from(auditLogs).where(
     and(
-      eq(auditLogs2.userId, hubAccountUserId),
-      inArray(auditLogs2.action, [...OUTBOUND_ACTIONS]),
-      eq(auditLogs2.denial, false)
+      eq(auditLogs.userId, hubAccountUserId),
+      inArray(auditLogs.action, [...OUTBOUND_ACTIONS]),
+      eq(auditLogs.denial, false)
     )
-  ).orderBy(desc(auditLogs2.createdAt)).limit(limit);
+  ).orderBy(desc(auditLogs.createdAt)).limit(limit);
   const allIds = [...inboundRows, ...outboundRows];
   const bookIds = [
     ...new Set(
@@ -39200,64 +39382,59 @@ var router8 = Router8();
 var p2pStatusUpdateSchema = external_exports.object({
   status: external_exports.enum(["approved", "rejected"])
 });
-router8.put(
-  "/p2p-submissions/:listingId/status",
-  authMiddleware,
-  requireAuth,
-  async (req, res) => {
-    const auth = req.auth;
-    const listingId = pathParam(req.params["listingId"]);
-    if (!listingId) {
-      return res.status(400).json({ error: "Invalid listing ID" });
-    }
-    const parsed = p2pStatusUpdateSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: "Invalid status" });
-    }
-    const { status } = parsed.data;
-    try {
-      await db.transaction(async (tx) => {
-        const listing = await tx.query.p2pListings.findFirst({
-          where: eq(p2pListings.id, listingId)
-        });
-        if (!listing) {
-          throw new Error("NOT_FOUND");
-        }
-        if (listing.status !== "pending_dropoff") {
-          throw new Error("BAD_STATUS");
-        }
-        if (!listing.dropoffHubId) {
-          throw new Error("NO_HUB_ID");
-        }
-        if (!auth.hubStaffHubIds.includes(listing.dropoffHubId)) {
-          throw new Error("FORBIDDEN");
-        }
-        if (status === "approved") {
-          const [newBook] = await tx.insert(books).values({
-            refId: await nextBookRefId(),
-            title: listing.bookTitle,
-            hubId: listing.dropoffHubId,
-            coverImageUrl: listing.coverImageUrl,
-            source: "p2p",
-            status: "available",
-            buyPrice: listing.price,
-            borrowPrice: listing.borrowPrice,
-            ownerId: listing.ownerId,
-            listingId: listing.id
-          }).returning();
-          await tx.update(p2pListings).set({ status: "approved" }).where(eq(p2pListings.id, listingId));
-        } else {
-          await tx.update(p2pListings).set({ status }).where(eq(p2pListings.id, listingId));
-        }
-      });
-      res.json({ success: true });
-      return res.json({ success: true });
-    } catch (error) {
-      logger.error(error, "Failed to update P2P submission status");
-      return res.status(500).json({ error: "Something went wrong, please try again later." });
-    }
+router8.put("/p2p-submissions/:listingId/status", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  const listingId = pathParam(req.params["listingId"]);
+  if (!listingId) {
+    return res.status(400).json({ error: "Invalid listing ID" });
   }
-);
+  const parsed = p2pStatusUpdateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Invalid status" });
+  }
+  const { status } = parsed.data;
+  try {
+    await db.transaction(async (tx) => {
+      const listing = await tx.query.p2pListings.findFirst({
+        where: eq(p2pListings.id, listingId)
+      });
+      if (!listing) {
+        throw new Error("NOT_FOUND");
+      }
+      if (listing.status !== "pending_dropoff") {
+        throw new Error("BAD_STATUS");
+      }
+      if (!listing.dropoffHubId) {
+        throw new Error("NO_HUB_ID");
+      }
+      if (!auth.hubStaffHubIds.includes(listing.dropoffHubId)) {
+        throw new Error("FORBIDDEN");
+      }
+      if (status === "approved") {
+        await tx.insert(books).values({
+          refId: await nextBookRefId(),
+          title: listing.bookTitle,
+          hubId: listing.dropoffHubId,
+          coverImageUrl: listing.coverImageUrl,
+          source: "p2p",
+          status: "available",
+          buyPrice: listing.price,
+          borrowPrice: listing.borrowPrice,
+          ownerId: listing.ownerId,
+          listingId: listing.id
+        }).returning();
+        await tx.update(p2pListings).set({ status: "approved" }).where(eq(p2pListings.id, listingId));
+      } else {
+        await tx.update(p2pListings).set({ status }).where(eq(p2pListings.id, listingId));
+      }
+    });
+    res.json({ success: true });
+    return res.json({ success: true });
+  } catch (error) {
+    logger.error(error, "Failed to update P2P submission status");
+    return res.status(500).json({ error: "Something went wrong, please try again later." });
+  }
+});
 function escapeIlikePattern2(s) {
   return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
 }
@@ -39489,7 +39666,9 @@ router8.post("/books/:bookId/scan", authMiddleware, requireAuth, async (req, res
       return;
     }
     if (err.message === "SCAN_RESERVED_NO_CHECKOUT") {
-      res.status(409).json({ error: "Reserved copies cannot be checked out manually. Record request pickup instead." });
+      res.status(409).json({
+        error: "Reserved copies cannot be checked out manually. Record request pickup instead."
+      });
       return;
     }
     if (err.message === "SCAN_TRANSFER") {
@@ -39512,289 +39691,306 @@ router8.post("/books/:bookId/scan", authMiddleware, requireAuth, async (req, res
   });
   res.json({ ok: true });
 });
-router8.post("/books/:bookId/acquire-peer-ownership", authMiddleware, requireAuth, async (req, res) => {
-  const auth = req.auth;
-  const bookId = pathParam(req.params["bookId"]);
-  if (!bookId) {
-    res.status(400).json({ error: "Missing book" });
-    return;
-  }
-  try {
-    const hubId = await db.transaction(async (tx) => {
-      await tx.execute(sql`SELECT id FROM books WHERE id = ${bookId}::uuid FOR UPDATE`);
-      const [book] = await tx.select().from(books).where(eq(books.id, bookId)).limit(1);
-      if (!book) {
-        const err = new Error("NOT_FOUND");
-        err.status = 404;
-        throw err;
-      }
-      requireHubStaff(auth, book.hubId);
-      if (!authorize(auth, ACTIONS.MANAGE_INVENTORY, {
-        type: "book",
-        hubId: book.hubId,
-        bookId: book.id
-      })) {
-        const err = new Error("FORBIDDEN");
-        err.status = 403;
-        throw err;
-      }
-      await requireActiveHub(tx, book.hubId);
-      if (book.source !== "p2p") {
-        const err = new Error("NOT_P2P");
-        err.status = 409;
-        throw err;
-      }
-      if (book.status !== "available") {
-        const err = new Error("NOT_AVAILABLE");
-        err.status = 409;
-        throw err;
-      }
-      const listingId = book.listingId;
-      if (listingId) {
-        const [listing] = await tx.select().from(p2pListings).where(eq(p2pListings.id, listingId)).limit(1);
-        if (listing && (listing.status === "available" || listing.status === "pending_dropoff")) {
-          await tx.update(p2pListings).set({ status: "expired", updatedAt: /* @__PURE__ */ new Date() }).where(eq(p2pListings.id, listingId));
-          await notifyUser({
-            userId: listing.ownerId,
-            kind: "p2p_hub_acquired_copy",
-            body: `The hub acquired the physical copy for \u201C${listing.bookTitle}\u201D into its own inventory. This listing was closed.`
-          });
+router8.post(
+  "/books/:bookId/acquire-peer-ownership",
+  authMiddleware,
+  requireAuth,
+  async (req, res) => {
+    const auth = req.auth;
+    const bookId = pathParam(req.params["bookId"]);
+    if (!bookId) {
+      res.status(400).json({ error: "Missing book" });
+      return;
+    }
+    try {
+      const hubId = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM books WHERE id = ${bookId}::uuid FOR UPDATE`);
+        const [book] = await tx.select().from(books).where(eq(books.id, bookId)).limit(1);
+        if (!book) {
+          const err = new Error("NOT_FOUND");
+          err.status = 404;
+          throw err;
         }
-      }
-      await tx.update(books).set({
-        source: "hub_inventory",
-        ownerId: null,
-        listingId: null,
-        updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq(books.id, bookId));
-      return book.hubId;
-    });
-    await logAudit({
-      userId: auth.userId,
-      hubId,
-      action: ACTIONS.MANAGE_INVENTORY,
-      resourceType: "book",
-      resourceId: bookId,
-      meta: { acquirePeerToHub: true }
-    });
-    res.json({ ok: true });
-  } catch (e) {
-    const err = e;
-    if (err.message === "NOT_FOUND") {
-      res.status(404).json({ error: "Not found" });
-      return;
-    }
-    if (err.message === "HUB_FORBIDDEN" || err.message === "FORBIDDEN") {
-      res.status(403).json({ error: "Forbidden" });
-      return;
-    }
-    if (err.message === "HUB_INACTIVE") {
-      res.status(403).json({ error: "This hub is inactive." });
-      return;
-    }
-    if (err.message === "NOT_P2P") {
-      res.status(409).json({ error: "Only peer consignment copies can be converted to hub inventory." });
-      return;
-    }
-    if (err.message === "NOT_AVAILABLE") {
-      res.status(409).json({
-        error: "Only available on-shelf copies can be acquired. Return or resolve loans first."
+        requireHubStaff(auth, book.hubId);
+        if (!authorize(auth, ACTIONS.MANAGE_INVENTORY, {
+          type: "book",
+          hubId: book.hubId,
+          bookId: book.id
+        })) {
+          const err = new Error("FORBIDDEN");
+          err.status = 403;
+          throw err;
+        }
+        await requireActiveHub(tx, book.hubId);
+        if (book.source !== "p2p") {
+          const err = new Error("NOT_P2P");
+          err.status = 409;
+          throw err;
+        }
+        if (book.status !== "available") {
+          const err = new Error("NOT_AVAILABLE");
+          err.status = 409;
+          throw err;
+        }
+        const listingId = book.listingId;
+        if (listingId) {
+          const [listing] = await tx.select().from(p2pListings).where(eq(p2pListings.id, listingId)).limit(1);
+          if (listing && (listing.status === "available" || listing.status === "pending_dropoff")) {
+            await tx.update(p2pListings).set({ status: "expired", updatedAt: /* @__PURE__ */ new Date() }).where(eq(p2pListings.id, listingId));
+            await notifyUser({
+              userId: listing.ownerId,
+              kind: "p2p_hub_acquired_copy",
+              body: `The hub acquired the physical copy for \u201C${listing.bookTitle}\u201D into its own inventory. This listing was closed.`
+            });
+          }
+        }
+        await tx.update(books).set({
+          source: "hub_inventory",
+          ownerId: null,
+          listingId: null,
+          updatedAt: /* @__PURE__ */ new Date()
+        }).where(eq(books.id, bookId));
+        return book.hubId;
       });
-      return;
-    }
-    logger.error(e, "Failed to acquire peer ownership");
-    res.status(500).json({ error: "Something went wrong, please try again later." });
-    return;
-  }
-});
-router8.post("/books/:bookId/transfer/mark-in-transit", authMiddleware, requireAuth, async (req, res) => {
-  const auth = req.auth;
-  const bookId = pathParam(req.params["bookId"]);
-  if (!bookId) {
-    res.status(400).json({ error: "Missing book" });
-    return;
-  }
-  let auditHubId = null;
-  try {
-    await db.transaction(async (tx) => {
-      await tx.execute(sql`SELECT id FROM books WHERE id = ${bookId}::uuid FOR UPDATE`);
-      const [book] = await tx.select().from(books).where(eq(books.id, bookId)).limit(1);
-      if (!book) {
-        const err = new Error("NOT_FOUND");
-        err.status = 404;
-        throw err;
-      }
-      auditHubId = book.hubId;
-      if (book.status !== "transfer_pending") {
-        const err = new Error("BAD_TRANSFER_STATE");
-        err.status = 409;
-        throw err;
-      }
-      if (!book.targetHubId || book.hubId !== book.originalHubId) {
-        const err = new Error("TRANSFER_MISMATCH");
-        err.status = 409;
-        throw err;
-      }
-      requireHubStaff(auth, book.hubId);
-      if (!authorize(auth, ACTIONS.MANAGE_INVENTORY, {
-        type: "book",
-        hubId: book.hubId,
-        bookId: book.id
-      })) {
-        const err = new Error("FORBIDDEN");
-        err.status = 403;
-        throw err;
-      }
-      await requireActiveHub(tx, book.hubId);
-      const now = /* @__PURE__ */ new Date();
-      const [upd] = await tx.update(books).set({ status: "in_transit", updatedAt: now }).where(and(eq(books.id, bookId), eq(books.status, "transfer_pending"))).returning({ id: books.id });
-      if (!upd) {
-        const err = new Error("RACE");
-        err.status = 409;
-        throw err;
-      }
-    });
-    await logAudit({
-      userId: auth.userId,
-      hubId: auditHubId,
-      action: "HUB_BOOK_TRANSFER_IN_TRANSIT",
-      resourceType: "book",
-      resourceId: bookId,
-      meta: {}
-    });
-    res.json({ ok: true });
-  } catch (e) {
-    const err = e;
-    if (err.message === "NOT_FOUND") {
-      res.status(404).json({ error: "Not found" });
-      return;
-    }
-    if (err.message === "FORBIDDEN" || err.message === "HUB_FORBIDDEN") {
-      res.status(403).json({ error: "Forbidden" });
-      return;
-    }
-    if (err.message === "HUB_INACTIVE") {
-      res.status(403).json({ error: "This hub is inactive." });
-      return;
-    }
-    if (err.message === "BAD_TRANSFER_STATE") {
-      res.status(409).json({ error: "Only copies awaiting shipment (transfer pending) can be marked in transit." });
-      return;
-    }
-    if (err.message === "TRANSFER_MISMATCH") {
-      res.status(409).json({ error: "Transfer metadata is inconsistent; contact support." });
-      return;
-    }
-    logger.error(e, "Failed to mark book in transit");
-    res.status(500).json({ error: "Something went wrong, please try again later." });
-    if (err.message === "RACE") {
-      res.status(409).json({ error: "Another update just changed this copy. Refresh and try again." });
-      return;
-    }
-    throw e;
-  }
-});
-router8.post("/books/:bookId/transfer/mark-received", authMiddleware, requireAuth, async (req, res) => {
-  const auth = req.auth;
-  const bookId = pathParam(req.params["bookId"]);
-  if (!bookId) {
-    res.status(400).json({ error: "Missing book" });
-    return;
-  }
-  let auditHubId = null;
-  try {
-    await db.transaction(async (tx) => {
-      await tx.execute(sql`SELECT id FROM books WHERE id = ${bookId}::uuid FOR UPDATE`);
-      const [book] = await tx.select().from(books).where(eq(books.id, bookId)).limit(1);
-      if (!book) {
-        const err = new Error("NOT_FOUND");
-        err.status = 404;
-        throw err;
-      }
-      if (book.status !== "in_transit") {
-        const err = new Error("BAD_TRANSFER_STATE");
-        err.status = 409;
-        throw err;
-      }
-      if (!book.targetHubId || !book.originalHubId) {
-        const err = new Error("TRANSFER_MISMATCH");
-        err.status = 409;
-        throw err;
-      }
-      const destHubId = book.targetHubId;
-      const titleForAssign = book.title;
-      auditHubId = destHubId;
-      requireHubStaff(auth, destHubId);
-      if (!authorize(auth, ACTIONS.MANAGE_INVENTORY, {
-        type: "book",
-        hubId: destHubId,
-        bookId: book.id
-      })) {
-        const err = new Error("FORBIDDEN");
-        err.status = 403;
-        throw err;
-      }
-      await requireActiveHub(tx, destHubId);
-      const now = /* @__PURE__ */ new Date();
-      const [upd] = await tx.update(books).set({
-        hubId: destHubId,
-        status: "available",
-        acquiredFromHubId: book.originalHubId,
-        targetHubId: null,
-        originalHubId: null,
-        updatedAt: now
-      }).where(and(eq(books.id, bookId), eq(books.status, "in_transit"))).returning({ id: books.id });
-      if (!upd) {
-        const err = new Error("RACE");
-        err.status = 409;
-        throw err;
-      }
-      await tryAssignCopyToWaitingRequests(tx, {
-        id: bookId,
-        hubId: destHubId,
-        title: titleForAssign
+      await logAudit({
+        userId: auth.userId,
+        hubId,
+        action: ACTIONS.MANAGE_INVENTORY,
+        resourceType: "book",
+        resourceId: bookId,
+        meta: { acquirePeerToHub: true }
       });
-    });
-    await logAudit({
-      userId: auth.userId,
-      hubId: auditHubId,
-      action: "HUB_BOOK_TRANSFER_RECEIVED",
-      resourceType: "book",
-      resourceId: bookId,
-      meta: {}
-    });
-    res.json({ ok: true });
-  } catch (e) {
-    const err = e;
-    if (err.message === "NOT_FOUND") {
-      res.status(404).json({ error: "Not found" });
+      res.json({ ok: true });
+    } catch (e) {
+      const err = e;
+      if (err.message === "NOT_FOUND") {
+        res.status(404).json({ error: "Not found" });
+        return;
+      }
+      if (err.message === "HUB_FORBIDDEN" || err.message === "FORBIDDEN") {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+      if (err.message === "HUB_INACTIVE") {
+        res.status(403).json({ error: "This hub is inactive." });
+        return;
+      }
+      if (err.message === "NOT_P2P") {
+        res.status(409).json({ error: "Only peer consignment copies can be converted to hub inventory." });
+        return;
+      }
+      if (err.message === "NOT_AVAILABLE") {
+        res.status(409).json({
+          error: "Only available on-shelf copies can be acquired. Return or resolve loans first."
+        });
+        return;
+      }
+      logger.error(e, "Failed to acquire peer ownership");
+      res.status(500).json({ error: "Something went wrong, please try again later." });
       return;
     }
-    if (err.message === "FORBIDDEN" || err.message === "HUB_FORBIDDEN") {
-      res.status(403).json({ error: "Forbidden" });
-      return;
-    }
-    if (err.message === "HUB_INACTIVE") {
-      res.status(403).json({ error: "This hub is inactive." });
-      return;
-    }
-    if (err.message === "BAD_TRANSFER_STATE") {
-      res.status(409).json({
-        error: "Only copies marked in transit can be received at the destination hub."
-      });
-      return;
-    }
-    if (err.message === "TRANSFER_MISMATCH") {
-      res.status(409).json({ error: "Transfer metadata is inconsistent; contact support." });
-      return;
-    }
-    if (err.message === "RACE") {
-      res.status(409).json({ error: "Another update just changed this copy. Refresh and try again." });
-      return;
-    }
-    throw e;
   }
-});
+);
+router8.post(
+  "/books/:bookId/transfer/mark-in-transit",
+  authMiddleware,
+  requireAuth,
+  async (req, res) => {
+    const auth = req.auth;
+    const bookId = pathParam(req.params["bookId"]);
+    if (!bookId) {
+      res.status(400).json({ error: "Missing book" });
+      return;
+    }
+    let auditHubId = null;
+    try {
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM books WHERE id = ${bookId}::uuid FOR UPDATE`);
+        const [book] = await tx.select().from(books).where(eq(books.id, bookId)).limit(1);
+        if (!book) {
+          const err = new Error("NOT_FOUND");
+          err.status = 404;
+          throw err;
+        }
+        auditHubId = book.hubId;
+        if (book.status !== "transfer_pending") {
+          const err = new Error("BAD_TRANSFER_STATE");
+          err.status = 409;
+          throw err;
+        }
+        if (!book.targetHubId || book.hubId !== book.originalHubId) {
+          const err = new Error("TRANSFER_MISMATCH");
+          err.status = 409;
+          throw err;
+        }
+        requireHubStaff(auth, book.hubId);
+        if (!authorize(auth, ACTIONS.MANAGE_INVENTORY, {
+          type: "book",
+          hubId: book.hubId,
+          bookId: book.id
+        })) {
+          const err = new Error("FORBIDDEN");
+          err.status = 403;
+          throw err;
+        }
+        await requireActiveHub(tx, book.hubId);
+        const now = /* @__PURE__ */ new Date();
+        const [upd] = await tx.update(books).set({ status: "in_transit", updatedAt: now }).where(and(eq(books.id, bookId), eq(books.status, "transfer_pending"))).returning({ id: books.id });
+        if (!upd) {
+          const err = new Error("RACE");
+          err.status = 409;
+          throw err;
+        }
+      });
+      await logAudit({
+        userId: auth.userId,
+        hubId: auditHubId,
+        action: "HUB_BOOK_TRANSFER_IN_TRANSIT",
+        resourceType: "book",
+        resourceId: bookId,
+        meta: {}
+      });
+      res.json({ ok: true });
+    } catch (e) {
+      const err = e;
+      if (err.message === "NOT_FOUND") {
+        res.status(404).json({ error: "Not found" });
+        return;
+      }
+      if (err.message === "FORBIDDEN" || err.message === "HUB_FORBIDDEN") {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+      if (err.message === "HUB_INACTIVE") {
+        res.status(403).json({ error: "This hub is inactive." });
+        return;
+      }
+      if (err.message === "BAD_TRANSFER_STATE") {
+        res.status(409).json({
+          error: "Only copies awaiting shipment (transfer pending) can be marked in transit."
+        });
+        return;
+      }
+      if (err.message === "TRANSFER_MISMATCH") {
+        res.status(409).json({ error: "Transfer metadata is inconsistent; contact support." });
+        return;
+      }
+      logger.error(e, "Failed to mark book in transit");
+      res.status(500).json({ error: "Something went wrong, please try again later." });
+      if (err.message === "RACE") {
+        res.status(409).json({ error: "Another update just changed this copy. Refresh and try again." });
+        return;
+      }
+      throw e;
+    }
+  }
+);
+router8.post(
+  "/books/:bookId/transfer/mark-received",
+  authMiddleware,
+  requireAuth,
+  async (req, res) => {
+    const auth = req.auth;
+    const bookId = pathParam(req.params["bookId"]);
+    if (!bookId) {
+      res.status(400).json({ error: "Missing book" });
+      return;
+    }
+    let auditHubId = null;
+    try {
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM books WHERE id = ${bookId}::uuid FOR UPDATE`);
+        const [book] = await tx.select().from(books).where(eq(books.id, bookId)).limit(1);
+        if (!book) {
+          const err = new Error("NOT_FOUND");
+          err.status = 404;
+          throw err;
+        }
+        if (book.status !== "in_transit") {
+          const err = new Error("BAD_TRANSFER_STATE");
+          err.status = 409;
+          throw err;
+        }
+        if (!book.targetHubId || !book.originalHubId) {
+          const err = new Error("TRANSFER_MISMATCH");
+          err.status = 409;
+          throw err;
+        }
+        const destHubId = book.targetHubId;
+        const titleForAssign = book.title;
+        auditHubId = destHubId;
+        requireHubStaff(auth, destHubId);
+        if (!authorize(auth, ACTIONS.MANAGE_INVENTORY, {
+          type: "book",
+          hubId: destHubId,
+          bookId: book.id
+        })) {
+          const err = new Error("FORBIDDEN");
+          err.status = 403;
+          throw err;
+        }
+        await requireActiveHub(tx, destHubId);
+        const now = /* @__PURE__ */ new Date();
+        const [upd] = await tx.update(books).set({
+          hubId: destHubId,
+          status: "available",
+          acquiredFromHubId: book.originalHubId,
+          targetHubId: null,
+          originalHubId: null,
+          updatedAt: now
+        }).where(and(eq(books.id, bookId), eq(books.status, "in_transit"))).returning({ id: books.id });
+        if (!upd) {
+          const err = new Error("RACE");
+          err.status = 409;
+          throw err;
+        }
+        await tryAssignCopyToWaitingRequests(tx, {
+          id: bookId,
+          hubId: destHubId,
+          title: titleForAssign
+        });
+      });
+      await logAudit({
+        userId: auth.userId,
+        hubId: auditHubId,
+        action: "HUB_BOOK_TRANSFER_RECEIVED",
+        resourceType: "book",
+        resourceId: bookId,
+        meta: {}
+      });
+      res.json({ ok: true });
+    } catch (e) {
+      const err = e;
+      if (err.message === "NOT_FOUND") {
+        res.status(404).json({ error: "Not found" });
+        return;
+      }
+      if (err.message === "FORBIDDEN" || err.message === "HUB_FORBIDDEN") {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+      if (err.message === "HUB_INACTIVE") {
+        res.status(403).json({ error: "This hub is inactive." });
+        return;
+      }
+      if (err.message === "BAD_TRANSFER_STATE") {
+        res.status(409).json({
+          error: "Only copies marked in transit can be received at the destination hub."
+        });
+        return;
+      }
+      if (err.message === "TRANSFER_MISMATCH") {
+        res.status(409).json({ error: "Transfer metadata is inconsistent; contact support." });
+        return;
+      }
+      if (err.message === "RACE") {
+        res.status(409).json({ error: "Another update just changed this copy. Refresh and try again." });
+        return;
+      }
+      throw e;
+    }
+  }
+);
 var sweepDeskSchema = external_exports.object({ hubId: external_exports.string().uuid().optional() });
 router8.post("/desk/sweep-assignments", authMiddleware, requireAuth, async (req, res) => {
   const auth = req.auth;
@@ -39802,7 +39998,9 @@ router8.post("/desk/sweep-assignments", authMiddleware, requireAuth, async (req,
     res.status(403).json({ error: "Hub staff only." });
     return;
   }
-  const parsed = sweepDeskSchema.safeParse(req.body && typeof req.body === "object" ? req.body : {});
+  const parsed = sweepDeskSchema.safeParse(
+    req.body && typeof req.body === "object" ? req.body : {}
+  );
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid body." });
     return;
@@ -39858,9 +40056,7 @@ router8.get("/books", authMiddleware, requireAuth, async (req, res) => {
   if (statusFilter) conditions.push(eq(books.status, statusFilter));
   if (qRaw.length > 0) {
     const pattern = `%${escapeIlikePattern2(qRaw)}%`;
-    conditions.push(
-      sql`(${books.title} ILIKE ${pattern} OR (${books.id})::text ILIKE ${pattern})`
-    );
+    conditions.push(sql`(${books.title} ILIKE ${pattern} OR (${books.id})::text ILIKE ${pattern})`);
   }
   const whereClause = conditions.length ? and(...conditions) : void 0;
   const w = whereClause ?? sql`true`;
@@ -39914,11 +40110,7 @@ router8.get("/overview", authMiddleware, requireAuth, async (req, res) => {
   }
   const rangeRaw = typeof req.query["range"] === "string" ? req.query["range"] : "week";
   const range = ["today", "week", "month"].includes(rangeRaw) ? rangeRaw : "week";
-  const payload = await buildHubOverviewPayload(
-    auth.hubStaffHubIds,
-    hubIdParam,
-    range
-  );
+  const payload = await buildHubOverviewPayload(auth.hubStaffHubIds, hubIdParam, range);
   res.json(payload);
 });
 router8.get("/super-admin-overview", authMiddleware, requireAuth, async (req, res) => {
@@ -40095,10 +40287,52 @@ router8.get("/zones", authMiddleware, requireAuth, async (req, res) => {
     return;
   }
   const zones = [
-    { id: "zone_1", name: "Computer Science", type: "shelf", x: 20, y: 30, width: 25, height: 15, aisle: "A", status: "idle", details: "CS, AI, Systems" },
-    { id: "zone_2", name: "Mechanical & Civil", type: "shelf", x: 50, y: 30, width: 25, height: 15, aisle: "B", status: "idle", details: "Core Engineering" },
-    { id: "zone_3", name: "Kiosk Desk 1", type: "kiosk", x: 10, y: 70, width: 12, height: 12, status: "busy", details: "Checkout & Returns" },
-    { id: "zone_4", name: "RFID Exit Gate", type: "gate", x: 80, y: 70, width: 8, height: 20, status: "idle", details: "Security Telemetry" }
+    {
+      id: "zone_1",
+      name: "Computer Science",
+      type: "shelf",
+      x: 20,
+      y: 30,
+      width: 25,
+      height: 15,
+      aisle: "A",
+      status: "idle",
+      details: "CS, AI, Systems"
+    },
+    {
+      id: "zone_2",
+      name: "Mechanical & Civil",
+      type: "shelf",
+      x: 50,
+      y: 30,
+      width: 25,
+      height: 15,
+      aisle: "B",
+      status: "idle",
+      details: "Core Engineering"
+    },
+    {
+      id: "zone_3",
+      name: "Kiosk Desk 1",
+      type: "kiosk",
+      x: 10,
+      y: 70,
+      width: 12,
+      height: 12,
+      status: "busy",
+      details: "Checkout & Returns"
+    },
+    {
+      id: "zone_4",
+      name: "RFID Exit Gate",
+      type: "gate",
+      x: 80,
+      y: 70,
+      width: 8,
+      height: 20,
+      status: "idle",
+      details: "Security Telemetry"
+    }
   ];
   res.json({ zones });
 });
@@ -40123,33 +40357,35 @@ router8.get("/students", authMiddleware, requireAuth, async (req, res) => {
       subscription: userSubscriptions,
       plan: subscriptionPlans
     }).from(memberships).where(and(eq(memberships.hubId, hubId), eq(memberships.role, "student"))).innerJoin(users, eq(users.id, memberships.userId)).leftJoin(wallets, eq(wallets.userId, users.id)).leftJoin(userSubscriptions, eq(userSubscriptions.userId, users.id)).leftJoin(subscriptionPlans, eq(subscriptionPlans.id, userSubscriptions.planId)).limit(limit).offset(offset);
-    const result = await Promise.all(studentMemberships.map(async (row) => {
-      let earned = 0;
-      let spent = 0;
-      if (row.wallet) {
-        const txs = await db.select().from(walletTransactions).where(eq(walletTransactions.walletId, row.wallet.id));
-        txs.forEach((t) => {
-          if (t.type === "credit") earned += t.amount;
-          if (t.type === "debit") spent += t.amount;
-        });
-      }
-      const [lastEvt] = await db.select().from(lifecycleEvents).where(eq(lifecycleEvents.userId, row.user.id)).orderBy(sql`created_at DESC`).limit(1);
-      return {
-        id: row.user.id,
-        publicId: row.user.publicId,
-        name: row.user.name,
-        email: row.user.email,
-        phone: row.user.phone,
-        accountStatus: row.user.accountStatus,
-        createdAt: row.user.createdAt,
-        walletBalance: row.wallet?.balance || 0,
-        creditsEarned: earned,
-        creditsSpent: spent,
-        subscriptionStatus: row.subscription?.status || "none",
-        subscriptionPlan: row.plan?.name || "Free",
-        lastActivityDate: lastEvt?.createdAt || row.user.createdAt
-      };
-    }));
+    const result = await Promise.all(
+      studentMemberships.map(async (row) => {
+        let earned = 0;
+        let spent = 0;
+        if (row.wallet) {
+          const txs = await db.select().from(walletTransactions).where(eq(walletTransactions.walletId, row.wallet.id));
+          txs.forEach((t) => {
+            if (t.type === "credit") earned += t.amount;
+            if (t.type === "debit") spent += t.amount;
+          });
+        }
+        const [lastEvt] = await db.select().from(lifecycleEvents).where(eq(lifecycleEvents.userId, row.user.id)).orderBy(sql`created_at DESC`).limit(1);
+        return {
+          id: row.user.id,
+          publicId: row.user.publicId,
+          name: row.user.name,
+          email: row.user.email,
+          phone: row.user.phone,
+          accountStatus: row.user.accountStatus,
+          createdAt: row.user.createdAt,
+          walletBalance: row.wallet?.balance || 0,
+          creditsEarned: earned,
+          creditsSpent: spent,
+          subscriptionStatus: row.subscription?.status || "none",
+          subscriptionPlan: row.plan?.name || "Free",
+          lastActivityDate: lastEvt?.createdAt || row.user.createdAt
+        };
+      })
+    );
     const [{ count: total }] = await db.select({ count: sql`count(*)`.mapWith(Number) }).from(memberships).where(and(eq(memberships.hubId, hubId), eq(memberships.role, "student")));
     res.json({
       students: result,
@@ -40183,7 +40419,7 @@ router8.get("/students/analytics", authMiddleware, requireAuth, async (req, res)
       subscription: userSubscriptions,
       plan: subscriptionPlans
     }).from(memberships).where(and(eq(memberships.hubId, hubId), eq(memberships.role, "student"))).innerJoin(users, eq(users.id, memberships.userId)).leftJoin(wallets, eq(wallets.userId, users.id)).leftJoin(userSubscriptions, eq(userSubscriptions.userId, users.id)).leftJoin(subscriptionPlans, eq(subscriptionPlans.id, userSubscriptions.planId));
-    let totalStudents = studentMemberships.length;
+    const totalStudents = studentMemberships.length;
     let activeSubscriptions = 0;
     let expiredSubscriptions = 0;
     let totalCreditsIssued = 0;
@@ -40293,16 +40529,18 @@ router9.get("/timeline", authMiddleware, requireAuth, async (req, res) => {
   const auth = req.auth;
   const limitRaw = typeof req.query["limit"] === "string" ? Number(req.query["limit"]) : 50;
   const limit = Number.isFinite(limitRaw) ? Math.min(100, Math.max(1, Math.floor(limitRaw))) : 50;
-  const rows = await db.select().from(auditLogs2).where(
+  const rows = await db.select().from(auditLogs).where(
     and(
-      eq(auditLogs2.userId, auth.userId),
-      eq(auditLogs2.denial, false),
-      inArray(auditLogs2.action, [...TRACKED_ACTIONS])
+      eq(auditLogs.userId, auth.userId),
+      eq(auditLogs.denial, false),
+      inArray(auditLogs.action, [...TRACKED_ACTIONS])
     )
-  ).orderBy(desc(auditLogs2.createdAt)).limit(limit);
+  ).orderBy(desc(auditLogs.createdAt)).limit(limit);
   const bookIds = [
     ...new Set(
-      rows.filter((r) => r.resourceType === "book" && r.resourceId && uuidParam2.safeParse(r.resourceId).success).map((r) => r.resourceId)
+      rows.filter(
+        (r) => r.resourceType === "book" && r.resourceId && uuidParam2.safeParse(r.resourceId).success
+      ).map((r) => r.resourceId)
     )
   ];
   const listingIds = [
@@ -40466,9 +40704,7 @@ async function getSystemHealth(hubIdFilter) {
     updatedAt: bookRequests.updatedAt,
     hubId: bookRequests.hubId,
     bookTitle: bookRequests.bookTitle
-  }).from(bookRequests).where(
-    and(eq(bookRequests.status, "fulfilled"), lt(bookRequests.updatedAt, fulfilledBefore))
-  ).limit(500);
+  }).from(bookRequests).where(and(eq(bookRequests.status, "fulfilled"), lt(bookRequests.updatedAt, fulfilledBefore))).limit(500);
   for (const r of fulfilledNotReady) {
     if (!inHubScope(r)) continue;
     issues.push({
@@ -40533,7 +40769,7 @@ async function getSystemHealth(hubIdFilter) {
     }).from(bookRequests).where(inArray(bookRequests.assignedCopyId, conflictingBookIds)).limit(500);
     const byBook = /* @__PURE__ */ new Map();
     for (const r of reqRows) {
-      if (!r.assignedCopyId) continue;
+      if (!r.assignedCopyId || !r.hubId) continue;
       const existing = byBook.get(r.assignedCopyId);
       if (!existing || existing.startedAt > r.updatedAt.toISOString()) {
         byBook.set(r.assignedCopyId, {
@@ -40574,7 +40810,11 @@ async function getSystemHealth(hubIdFilter) {
       id: `request-near-expiry-${r.id}`,
       severity: "warning",
       description: "Request is nearing expiry and needs immediate desk action.",
-      relatedEntity: { type: "request", id: r.id, label: r.bookTitle?.trim() || "Untitled request" },
+      relatedEntity: {
+        type: "request",
+        id: r.id,
+        label: r.bookTitle?.trim() || "Untitled request"
+      },
       hubId: r.hubId,
       startedAt: r.expiresAt.toISOString(),
       action: { kind: "close_request", requestId: r.id, outcome: "expired" }
@@ -40587,14 +40827,7 @@ async function getSystemHealth(hubIdFilter) {
     bookTitle: bookRequests.bookTitle,
     id: bookRequests.id,
     updatedAt: bookRequests.updatedAt
-  }).from(bookRequests).where(
-    inArray(bookRequests.status, [
-      "requested",
-      "routed",
-      "fulfilled",
-      "ready"
-    ])
-  );
+  }).from(bookRequests).where(inArray(bookRequests.status, ["requested", "routed", "fulfilled", "ready"]));
   const byHubTitle = /* @__PURE__ */ new Map();
   const firstReqByHubTitle = /* @__PURE__ */ new Map();
   for (const r of allReq) {
@@ -40612,10 +40845,7 @@ async function getSystemHealth(hubIdFilter) {
     }
   }
   const avail = await db.select({ hubId: books.hubId, title: books.title, id: books.id }).from(books).where(
-    and(
-      inArray(books.status, ["available", "reserved"]),
-      eq(books.source, "hub_inventory")
-    )
+    and(inArray(books.status, ["available", "reserved"]), eq(books.source, "hub_inventory"))
   );
   const availableByHubTitle = /* @__PURE__ */ new Map();
   for (const b of avail) {
@@ -40627,7 +40857,7 @@ async function getSystemHealth(hubIdFilter) {
     if (v.ids.length < 2) continue;
     const availN = availableByHubTitle.get(k) ?? 0;
     if (availN >= v.ids.length) continue;
-    const [hubId, titleKey] = k.split("::", 2);
+    const [hubId] = k.split("::", 2);
     if (!hubId || hubIdFilter && hubId !== hubIdFilter) continue;
     const lead = firstReqByHubTitle.get(k);
     if (!lead) continue;
@@ -40658,7 +40888,7 @@ async function getSystemHealth(hubIdFilter) {
   }
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1e3);
   const activeHubs = await db.select({ id: hubs.id, name: hubs.name }).from(hubs).where(eq(hubs.isActive, true));
-  const recentHubActivity = await db.select({ hubId: auditLogs2.hubId, n: count() }).from(auditLogs2).where(and(isNotNull(auditLogs2.hubId), sql`${auditLogs2.createdAt} >= ${sevenDaysAgo}`)).groupBy(auditLogs2.hubId);
+  const recentHubActivity = await db.select({ hubId: auditLogs.hubId, n: count() }).from(auditLogs).where(and(isNotNull(auditLogs.hubId), sql`${auditLogs.createdAt} >= ${sevenDaysAgo}`)).groupBy(auditLogs.hubId);
   const hubActivityMap = new Map(
     recentHubActivity.filter((r) => r.hubId != null).map((r) => [r.hubId, Number(r.n)])
   );
@@ -40666,7 +40896,9 @@ async function getSystemHealth(hubIdFilter) {
     if (hubIdFilter && h.id !== hubIdFilter) continue;
     const recentN = hubActivityMap.get(h.id) ?? 0;
     if (recentN > 0) continue;
-    const [openReq] = await db.select({ id: bookRequests.id, updatedAt: bookRequests.updatedAt }).from(bookRequests).where(and(eq(bookRequests.hubId, h.id), inArray(bookRequests.status, ["requested", "routed"]))).limit(1);
+    const [openReq] = await db.select({ id: bookRequests.id, updatedAt: bookRequests.updatedAt }).from(bookRequests).where(
+      and(eq(bookRequests.hubId, h.id), inArray(bookRequests.status, ["requested", "routed"]))
+    ).limit(1);
     if (!openReq) continue;
     issues.push({
       id: `inactive-hub-${h.id}`,
@@ -40732,7 +40964,12 @@ async function adminCloseBookRequest(params) {
       action: outcome === "cancelled" ? "ADMIN_BOOK_REQUEST_CLOSE" : "ADMIN_BOOK_REQUEST_EXPIRE",
       resourceType: "book_request",
       resourceId: requestId,
-      meta: { priorStatus: fresh.status, outcome, requestUserId: fresh.userId, reason: reason ?? null }
+      meta: {
+        priorStatus: fresh.status,
+        outcome,
+        requestUserId: fresh.userId,
+        reason: reason ?? null
+      }
     });
     return { request: u, code: "ok" };
   });
@@ -40985,7 +41222,12 @@ async function reassignBookRequestToHub(params) {
     try {
       await requireActiveHub(tx, newHubId);
     } catch {
-      return { request: null, previousHubId: null, reassigned: false, code: "inactive_hub" };
+      return {
+        request: null,
+        previousHubId: null,
+        reassigned: false,
+        code: "inactive_hub"
+      };
     }
     if (row.status !== "pending" && row.status !== "requested" && row.status !== "routed") {
       return { request: null, previousHubId: null, reassigned: false, code: "bad_state" };
@@ -40994,14 +41236,12 @@ async function reassignBookRequestToHub(params) {
     const [u] = await tx.update(bookRequests).set({
       hubId: newHubId,
       updatedAt: /* @__PURE__ */ new Date()
-    }).where(
-      and(
-        eq(bookRequests.id, requestId),
-        sql`${bookRequests.assignedCopyId} IS NULL`
-      )
-    ).returning();
+    }).where(and(eq(bookRequests.id, requestId), sql`${bookRequests.assignedCopyId} IS NULL`)).returning();
     if (!u) {
       return { request: null, previousHubId: row.hubId, reassigned: false, code: "stale" };
+    }
+    if (!row.hubId) {
+      return { request: null, previousHubId: null, reassigned: false, code: "stale" };
     }
     await tx.insert(bookRequestHubReassignments).values({
       requestId,
@@ -41024,7 +41264,12 @@ async function reassignBookRequestToHub(params) {
       action: "ADMIN_BOOK_REQUEST_REASSIGN_HUB",
       resourceType: "book_request",
       resourceId: requestId,
-      meta: { fromHubId: row.hubId, toHubId: newHubId, reason: reason ?? null, requestUserId: row.userId }
+      meta: {
+        fromHubId: row.hubId,
+        toHubId: newHubId,
+        reason: reason ?? null,
+        requestUserId: row.userId
+      }
     });
     await recordLifecycleEvent({
       type: "request_reassigned",
@@ -41044,15 +41289,8 @@ async function reassignBookRequestToHub(params) {
 
 // src/routes/admin.ts
 var router10 = Router10();
-var hubKindSchema2 = external_exports.enum([
-  "college",
-  "public",
-  "government",
-  "private",
-  "other"
-]);
+var hubKindSchema2 = external_exports.enum(["college", "public", "government", "private", "other"]);
 var baseRoleSchema = external_exports.enum(["user", "hub", "super_admin"]);
-var accountStatusSchema = external_exports.enum(["active", "held", "deactivated"]);
 var patchUserSchema = external_exports.object({
   name: external_exports.string().min(1).max(200).optional(),
   baseRole: baseRoleSchema.optional()
@@ -41154,20 +41392,20 @@ router10.get("/users/:userId", requireSuperAdmin, async (req, res) => {
     dueAt: books.dueAt
   }).from(books).innerJoin(hubs, eq(books.hubId, hubs.id)).where(eq(books.borrowerUserId, userId)).orderBy(desc(books.updatedAt));
   const returnedBorrowRows = await db.select({
-    id: auditLogs2.id,
-    actionAt: auditLogs2.createdAt,
-    bookId: auditLogs2.resourceId,
+    id: auditLogs.id,
+    actionAt: auditLogs.createdAt,
+    bookId: auditLogs.resourceId,
     title: books.title,
     coverImageUrl: books.coverImageUrl,
     hubId: books.hubId,
     hubName: hubs.name
-  }).from(auditLogs2).innerJoin(books, sql`${books.id}::text = ${auditLogs2.resourceId}`).innerJoin(hubs, eq(books.hubId, hubs.id)).where(
+  }).from(auditLogs).innerJoin(books, sql`${books.id}::text = ${auditLogs.resourceId}`).innerJoin(hubs, eq(books.hubId, hubs.id)).where(
     and(
-      eq(auditLogs2.userId, userId),
-      eq(auditLogs2.action, "BOOK_RETURN"),
-      eq(auditLogs2.resourceType, "book")
+      eq(auditLogs.userId, userId),
+      eq(auditLogs.action, "BOOK_RETURN"),
+      eq(auditLogs.resourceType, "book")
     )
-  ).orderBy(desc(auditLogs2.createdAt));
+  ).orderBy(desc(auditLogs.createdAt));
   const purchases = [
     ...hubPurchases.map((r) => ({
       id: r.id,
@@ -41405,11 +41643,7 @@ router10.get("/hubs", requireSuperAdmin, async (req, res) => {
   const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? "50"), 10) || 50));
   const offset = Math.max(0, parseInt(String(req.query.offset ?? "0"), 10) || 0);
   const pattern = q ? `%${escapeIlikePattern3(q)}%` : null;
-  const whereClause = pattern ? or(
-    ilike(hubs.name, pattern),
-    ilike(hubs.location, pattern),
-    ilike(hubs.kind, pattern)
-  ) : void 0;
+  const whereClause = pattern ? or(ilike(hubs.name, pattern), ilike(hubs.location, pattern), ilike(hubs.kind, pattern)) : void 0;
   const fromHubs = db.select({ n: count() }).from(hubs);
   const [totalRow] = whereClause ? await fromHubs.where(whereClause) : await fromHubs;
   const fromHubsList = db.select().from(hubs);
@@ -41428,7 +41662,9 @@ router10.get("/hubs", requireSuperAdmin, async (req, res) => {
         inArray(bookRequests.status, [...BOOK_REQUEST_ACTIVE_STATUSES])
       )
     ).groupBy(bookRequests.hubId);
-    for (const r of rRows) actReqByHub.set(r.hubId, Number(r.n));
+    for (const r of rRows) {
+      if (r.hubId) actReqByHub.set(r.hubId, Number(r.n));
+    }
   }
   res.json({
     hubs: hubList.map((h) => ({
@@ -41484,7 +41720,13 @@ router10.get("/hubs/:hubId", requireSuperAdmin, async (req, res) => {
     borrowerUserId: books.borrowerUserId,
     dueAt: books.dueAt,
     updatedAt: books.updatedAt
-  }).from(books).where(and(eq(books.hubId, hubId), eq(books.status, "checked_out"), eq(books.source, "hub_inventory"))).orderBy(desc(books.updatedAt)).limit(80);
+  }).from(books).where(
+    and(
+      eq(books.hubId, hubId),
+      eq(books.status, "checked_out"),
+      eq(books.source, "hub_inventory")
+    )
+  ).orderBy(desc(books.updatedAt)).limit(80);
   const soldBookRows = await db.select({
     id: books.id,
     title: books.title,
@@ -41504,16 +41746,23 @@ router10.get("/hubs/:hubId", requireSuperAdmin, async (req, res) => {
     "BOOK_RETURN",
     "P2P_BORROW_RETURN"
   ];
-  const commerceWhere = listingIds.length === 0 ? and(inArray(auditLogs2.action, commerceActions), eq(auditLogs2.denial, false), eq(auditLogs2.hubId, hubId)) : and(
-    inArray(auditLogs2.action, commerceActions),
-    eq(auditLogs2.denial, false),
+  const commerceWhere = listingIds.length === 0 ? and(
+    inArray(auditLogs.action, commerceActions),
+    eq(auditLogs.denial, false),
+    eq(auditLogs.hubId, hubId)
+  ) : and(
+    inArray(auditLogs.action, commerceActions),
+    eq(auditLogs.denial, false),
     or(
-      eq(auditLogs2.hubId, hubId),
-      and(eq(auditLogs2.resourceType, "p2p_listing"), inArray(auditLogs2.resourceId, listingIds))
+      eq(auditLogs.hubId, hubId),
+      and(
+        eq(auditLogs.resourceType, "p2p_listing"),
+        inArray(auditLogs.resourceId, listingIds)
+      )
     )
   );
-  const [txTotal] = await db.select({ n: count() }).from(auditLogs2).where(commerceWhere);
-  const [txRecent] = await db.select({ n: count() }).from(auditLogs2).where(and(commerceWhere, sql`${auditLogs2.createdAt} >= NOW() - interval '7 days'`));
+  const [txTotal] = await db.select({ n: count() }).from(auditLogs).where(commerceWhere);
+  const [txRecent] = await db.select({ n: count() }).from(auditLogs).where(and(commerceWhere, sql`${auditLogs.createdAt} >= NOW() - interval '7 days'`));
   let totalBooks = 0;
   let available = 0;
   let checkedOut = 0;
@@ -41776,13 +42025,17 @@ router10.get("/notification-deliveries", requireSuperAdmin, async (req, res) => 
   const filteredByType = opsOnly ? rows.filter((r) => allowedOpsTypes.has(r.type)) : rows;
   const requestIds = [
     ...new Set(
-      filteredByType.map((r) => typeof r.payload["bookRequestId"] === "string" ? r.payload["bookRequestId"] : null).filter((id) => !!id)
+      filteredByType.map(
+        (r) => typeof r.payload["bookRequestId"] === "string" ? r.payload["bookRequestId"] : null
+      ).filter((id) => !!id)
     )
   ];
   const requestHub = /* @__PURE__ */ new Map();
   if (requestIds.length > 0) {
     const reqRows = await db.select({ id: bookRequests.id, hubId: bookRequests.hubId }).from(bookRequests).where(inArray(bookRequests.id, requestIds));
-    for (const r of reqRows) requestHub.set(r.id, r.hubId);
+    for (const r of reqRows) {
+      if (r.hubId) requestHub.set(r.id, r.hubId);
+    }
   }
   const withHub = filteredByType.map((r) => {
     const reqId = typeof r.payload["bookRequestId"] === "string" ? r.payload["bookRequestId"] : null;
@@ -41973,7 +42226,8 @@ router10.post("/book-requests/:id/reassign-hub", requireSuperAdmin, async (req, 
     res.status(409).json({ error: "Could not update" });
     return;
   }
-  const hubNameRow = await db.select({ name: hubs.name }).from(hubs).where(eq(hubs.id, r.request.hubId)).limit(1);
+  const requestHubId = r.request.hubId;
+  const hubNameRow = requestHubId != null ? await db.select({ name: hubs.name }).from(hubs).where(eq(hubs.id, requestHubId)).limit(1) : [];
   await notifyUser({
     userId: r.request.userId,
     kind: "book_request_reassigned",
@@ -42044,8 +42298,13 @@ router10.post("/book-requests/:id/assign-any-copy", requireSuperAdmin, async (re
     res.status(404).json({ error: "Request not found" });
     return;
   }
+  if (!row.hubId) {
+    res.status(409).json({ error: "Request has no hub" });
+    return;
+  }
+  const requestHubId = row.hubId;
   const normalized = (row.bookTitle ?? "").trim().toLowerCase();
-  const candidates = await db.select({ id: books.id, title: books.title, source: books.source, createdAt: books.createdAt }).from(books).where(and(eq(books.hubId, row.hubId), eq(books.status, "available"))).orderBy(books.createdAt).limit(250);
+  const candidates = await db.select({ id: books.id, title: books.title, source: books.source, createdAt: books.createdAt }).from(books).where(and(eq(books.hubId, requestHubId), eq(books.status, "available"))).orderBy(books.createdAt).limit(250);
   const match = normalized ? candidates.find((c) => c.title.trim().toLowerCase() === normalized) : candidates.find((c) => c.source === "hub_inventory") ?? candidates[0];
   let selected = match ?? null;
   if (!selected && !normalized) {
@@ -42091,15 +42350,7 @@ router10.post("/book-requests/:id/assign-any-copy", requireSuperAdmin, async (re
   res.json({ request: r.request });
 });
 var overrideStatus = external_exports.object({
-  to: external_exports.enum([
-    "requested",
-    "routed",
-    "fulfilled",
-    "ready",
-    "picked",
-    "expired",
-    "cancelled"
-  ]),
+  to: external_exports.enum(["requested", "routed", "fulfilled", "ready", "picked", "expired", "cancelled"]),
   confirm: external_exports.literal(true)
 }).strict();
 router10.post("/book-requests/:id/override-status", requireSuperAdmin, async (req, res) => {
@@ -42181,10 +42432,7 @@ router11.get("/balance", async (req, res) => {
     );
     res.json({ balance: wallet.balance });
   } catch (err) {
-    logger.error(
-      { err, walletUserId: req.auth.userId },
-      "wallet balance failed"
-    );
+    logger.error({ err, walletUserId: req.auth.userId }, "wallet balance failed");
     throw err;
   }
 });
@@ -42201,10 +42449,7 @@ router11.get("/transactions", async (req, res) => {
     );
     res.json({ transactions });
   } catch (err) {
-    logger.error(
-      { err, walletUserId: req.auth.userId },
-      "wallet transactions failed"
-    );
+    logger.error({ err, walletUserId: req.auth.userId }, "wallet transactions failed");
     throw err;
   }
 });
@@ -42508,17 +42753,19 @@ router13.get("/dashboard", requireAuth, async (req, res) => {
     ]);
     res.json({
       recentBooks,
-      recentPurchases: purchases.rows.map((p) => ({
-        id: p.id,
-        title: p.title,
-        date: p.createdAt ? new Date(p.createdAt).toLocaleDateString("en-IN", {
-          month: "short",
-          day: "numeric"
-        }) : "\u2014",
-        createdAt: p.createdAt,
-        amount: p.amount,
-        source: p.source
-      })),
+      recentPurchases: purchases.rows.map(
+        (p) => ({
+          id: p.id,
+          title: p.title,
+          date: p.createdAt ? new Date(p.createdAt).toLocaleDateString("en-IN", {
+            month: "short",
+            day: "numeric"
+          }) : "\u2014",
+          createdAt: p.createdAt,
+          amount: p.amount,
+          source: p.source
+        })
+      ),
       activeListings: [],
       stats: stats.rows[0] ?? {
         totalBought: 0,
@@ -42623,13 +42870,7 @@ var submitBountySchema = external_exports.object({
   photoUrls: external_exports.array(external_exports.string().url()).max(5).optional()
 });
 var submissionStatusSchema = external_exports.object({
-  status: external_exports.enum([
-    "awaiting_drop_off",
-    "under_review",
-    "approved",
-    "rejected",
-    "delivered"
-  ])
+  status: external_exports.enum(["awaiting_drop_off", "under_review", "approved", "rejected", "delivered"])
 });
 function serializeRequest2(row, hubName) {
   return {
@@ -42683,10 +42924,7 @@ router14.get("/requests", authMiddleware, requireAuth, async (req, res) => {
   }).from(bountyRequests).innerJoin(hubs, eq(bountyRequests.hubId, hubs.id)).where(
     and(
       inArray(bountyRequests.status, [...BOUNTY_ACTIVE_STATUSES]),
-      or(
-        sql`${bountyRequests.expiryDate} IS NULL`,
-        gte(bountyRequests.expiryDate, now)
-      )
+      or(sql`${bountyRequests.expiryDate} IS NULL`, gte(bountyRequests.expiryDate, now))
     )
   ).orderBy(desc(bountyRequests.createdAt));
   res.json({
@@ -42712,9 +42950,7 @@ router14.get("/hub/requests", authMiddleware, requireAuth, async (req, res) => {
       bountyRequestId: bountySubmissions.bountyRequestId,
       n: count()
     }).from(bountySubmissions).where(inArray(bountySubmissions.bountyRequestId, requestIds)).groupBy(bountySubmissions.bountyRequestId);
-    submissionCounts = Object.fromEntries(
-      counts.map((c) => [c.bountyRequestId, Number(c.n)])
-    );
+    submissionCounts = Object.fromEntries(counts.map((c) => [c.bountyRequestId, Number(c.n)]));
   }
   res.json({
     requests: rows.map((r) => ({
@@ -42812,7 +43048,8 @@ router14.patch("/hub/requests/:id", authMiddleware, requireAuth, async (req, res
   if (parsed.data.title !== void 0) patch.title = parsed.data.title.trim();
   if (parsed.data.author !== void 0) patch.author = parsed.data.author?.trim() || null;
   if (parsed.data.edition !== void 0) patch.edition = parsed.data.edition?.trim() || null;
-  if (parsed.data.department !== void 0) patch.department = parsed.data.department?.trim() || null;
+  if (parsed.data.department !== void 0)
+    patch.department = parsed.data.department?.trim() || null;
   if (parsed.data.semester !== void 0) patch.semester = parsed.data.semester?.trim() || null;
   if (parsed.data.subject !== void 0) patch.subject = parsed.data.subject?.trim() || null;
   if (parsed.data.isbn !== void 0) patch.isbn = parsed.data.isbn?.trim() || null;
@@ -42853,10 +43090,7 @@ router14.get("/hub/requests/:id", authMiddleware, requireAuth, async (req, res) 
     studentName: users.name,
     studentEmail: users.email,
     acquisition: bountyAcquisitions
-  }).from(bountySubmissions).innerJoin(users, eq(bountySubmissions.studentId, users.id)).leftJoin(
-    bountyAcquisitions,
-    eq(bountyAcquisitions.bountySubmissionId, bountySubmissions.id)
-  ).where(eq(bountySubmissions.bountyRequestId, id)).orderBy(desc(bountySubmissions.submittedAt));
+  }).from(bountySubmissions).innerJoin(users, eq(bountySubmissions.studentId, users.id)).leftJoin(bountyAcquisitions, eq(bountyAcquisitions.bountySubmissionId, bountySubmissions.id)).where(eq(bountySubmissions.bountyRequestId, id)).orderBy(desc(bountySubmissions.submittedAt));
   res.json({
     request: serializeRequest2(item.request, item.hubName),
     submissions: submissions.map((s) => ({
@@ -42957,10 +43191,7 @@ router14.get("/my-submissions", authMiddleware, requireAuth, async (req, res) =>
     request: bountyRequests,
     hubName: hubs.name,
     acquisition: bountyAcquisitions
-  }).from(bountySubmissions).innerJoin(bountyRequests, eq(bountySubmissions.bountyRequestId, bountyRequests.id)).innerJoin(hubs, eq(bountyRequests.hubId, hubs.id)).leftJoin(
-    bountyAcquisitions,
-    eq(bountyAcquisitions.bountySubmissionId, bountySubmissions.id)
-  ).where(eq(bountySubmissions.studentId, auth.userId)).orderBy(desc(bountySubmissions.submittedAt));
+  }).from(bountySubmissions).innerJoin(bountyRequests, eq(bountySubmissions.bountyRequestId, bountyRequests.id)).innerJoin(hubs, eq(bountyRequests.hubId, hubs.id)).leftJoin(bountyAcquisitions, eq(bountyAcquisitions.bountySubmissionId, bountySubmissions.id)).where(eq(bountySubmissions.studentId, auth.userId)).orderBy(desc(bountySubmissions.submittedAt));
   res.json({
     submissions: rows.map((r) => ({
       ...serializeSubmission(r.submission),
@@ -43065,151 +43296,159 @@ router14.patch("/hub/submissions/:id", authMiddleware, requireAuth, async (req, 
   await db.update(bountyRequests).set({ status: bountyStatus, updatedAt: /* @__PURE__ */ new Date() }).where(eq(bountyRequests.id, bounty.id));
   res.json({ submission: serializeSubmission(updated) });
 });
-router14.post("/hub/submissions/:id/confirm-receipt", authMiddleware, requireAuth, async (req, res) => {
-  const auth = req.auth;
-  const id = pathParam(req.params["id"]);
-  if (!id) {
-    res.status(400).json({ error: "Invalid id" });
-    return;
-  }
-  const submission = await db.query.bountySubmissions.findFirst({
-    where: eq(bountySubmissions.id, id)
-  });
-  if (!submission) {
-    res.status(404).json({ error: "Submission not found" });
-    return;
-  }
-  const bounty = await db.query.bountyRequests.findFirst({
-    where: eq(bountyRequests.id, submission.bountyRequestId)
-  });
-  if (!bounty) {
-    res.status(404).json({ error: "Bounty not found" });
-    return;
-  }
-  try {
-    requireHubStaff(auth, bounty.hubId);
-  } catch {
-    res.status(403).json({ error: "Forbidden" });
-    return;
-  }
-  if (submission.status === "inventory_confirmed") {
-    const existing = await db.query.bountyAcquisitions.findFirst({
-      where: eq(bountyAcquisitions.bountySubmissionId, submission.id)
+router14.post(
+  "/hub/submissions/:id/confirm-receipt",
+  authMiddleware,
+  requireAuth,
+  async (req, res) => {
+    const auth = req.auth;
+    const id = pathParam(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const submission = await db.query.bountySubmissions.findFirst({
+      where: eq(bountySubmissions.id, id)
     });
-    res.json({
-      alreadyConfirmed: true,
-      acquisition: existing ?? null,
-      submission: {
-        ...serializeSubmission(submission),
-        ...serializeAcquisition(existing)
+    if (!submission) {
+      res.status(404).json({ error: "Submission not found" });
+      return;
+    }
+    const bounty = await db.query.bountyRequests.findFirst({
+      where: eq(bountyRequests.id, submission.bountyRequestId)
+    });
+    if (!bounty) {
+      res.status(404).json({ error: "Bounty not found" });
+      return;
+    }
+    try {
+      requireHubStaff(auth, bounty.hubId);
+    } catch {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    if (submission.status === "inventory_confirmed") {
+      const existing = await db.query.bountyAcquisitions.findFirst({
+        where: eq(bountyAcquisitions.bountySubmissionId, submission.id)
+      });
+      res.json({
+        alreadyConfirmed: true,
+        acquisition: existing ?? null,
+        submission: {
+          ...serializeSubmission(submission),
+          ...serializeAcquisition(existing)
+        }
+      });
+      return;
+    }
+    if (submission.status !== "delivered") {
+      res.status(400).json({ error: "Submission not ready for inventory intake" });
+      return;
+    }
+    const result = await db.transaction(async (tx) => {
+      const existing = await tx.query.bountyAcquisitions.findFirst({
+        where: eq(bountyAcquisitions.bountySubmissionId, submission.id)
+      });
+      if (existing) {
+        return { book: null, acquisition: existing, alreadyConfirmed: true };
+      }
+      const [book] = await tx.insert(books).values({
+        refId: await nextBookRefId(),
+        title: bounty.title,
+        author: bounty.author,
+        isbn: bounty.isbn,
+        hubId: bounty.hubId,
+        source: "bounty",
+        status: "available",
+        condition: submission.condition,
+        buyPrice: 0,
+        borrowPrice: 0,
+        ownerId: submission.studentId
+      }).returning();
+      const paidAt = /* @__PURE__ */ new Date();
+      const [acquisition] = await tx.insert(bountyAcquisitions).values({
+        bountyRequestId: bounty.id,
+        bountySubmissionId: submission.id,
+        inventoryCopyId: book.id,
+        studentId: submission.studentId,
+        rewardAmount: bounty.rewardAmount,
+        rewardStatus: "paid",
+        rewardPaidAt: paidAt
+      }).returning();
+      await tx.update(bountySubmissions).set({ status: "inventory_confirmed", updatedAt: paidAt }).where(eq(bountySubmissions.id, id));
+      let wallet = await tx.query.wallets.findFirst({
+        where: eq(wallets.userId, submission.studentId)
+      });
+      if (!wallet) {
+        [wallet] = await tx.insert(wallets).values({ userId: submission.studentId, balance: 0 }).returning();
+      }
+      if (bounty.rewardAmount > 0) {
+        await tx.update(wallets).set({
+          balance: sql`${wallets.balance} + ${bounty.rewardAmount}`,
+          updatedAt: paidAt
+        }).where(eq(wallets.id, wallet.id));
+        await tx.insert(walletTransactions).values({
+          walletId: wallet.id,
+          type: "credit",
+          amount: bounty.rewardAmount,
+          description: `Bounty reward: ${bounty.title}`
+        });
+      }
+      const acquiredCount = await tx.select({ n: count() }).from(bountyAcquisitions).where(eq(bountyAcquisitions.bountyRequestId, bounty.id));
+      const fulfilled = Number(acquiredCount[0]?.n ?? 0) >= bounty.quantity;
+      await tx.update(bountyRequests).set({
+        status: fulfilled ? "completed" : "open",
+        updatedAt: /* @__PURE__ */ new Date()
+      }).where(eq(bountyRequests.id, bounty.id));
+      await tryAssignCopyToWaitingRequests(
+        tx,
+        {
+          id: book.id,
+          hubId: book.hubId,
+          title: book.title
+        }
+      );
+      return { book, acquisition, alreadyConfirmed: false };
+    });
+    if (result.alreadyConfirmed || !result.book) {
+      res.json({
+        alreadyConfirmed: true,
+        acquisition: result.acquisition,
+        submission: {
+          ...serializeSubmission({ ...submission, status: "inventory_confirmed" }),
+          ...serializeAcquisition(result.acquisition)
+        }
+      });
+      return;
+    }
+    await logAudit({
+      userId: auth.userId,
+      actorId: auth.userId,
+      hubId: bounty.hubId,
+      action: "BOUNTY_ACQUISITION",
+      resourceType: "book",
+      resourceId: result.book.id,
+      meta: {
+        bountyRequestId: bounty.id,
+        bountySubmissionId: submission.id,
+        rewardAmount: bounty.rewardAmount
       }
     });
-    return;
-  }
-  if (submission.status !== "delivered") {
-    res.status(400).json({ error: "Submission not ready for inventory intake" });
-    return;
-  }
-  const result = await db.transaction(async (tx) => {
-    const existing = await tx.query.bountyAcquisitions.findFirst({
-      where: eq(bountyAcquisitions.bountySubmissionId, submission.id)
+    await notifyUser({
+      userId: submission.studentId,
+      kind: "bounty_added_to_inventory",
+      body: `"${bounty.title}" was added to hub inventory. Reward: \u20B9${bounty.rewardAmount.toLocaleString("en-IN")}.`
     });
-    if (existing) {
-      return { book: null, acquisition: existing, alreadyConfirmed: true };
-    }
-    const [book] = await tx.insert(books).values({
-      refId: await nextBookRefId(),
-      title: bounty.title,
-      author: bounty.author,
-      isbn: bounty.isbn,
-      hubId: bounty.hubId,
-      source: "bounty",
-      status: "available",
-      condition: submission.condition,
-      buyPrice: 0,
-      borrowPrice: 0,
-      ownerId: submission.studentId
-    }).returning();
-    const paidAt = /* @__PURE__ */ new Date();
-    const [acquisition] = await tx.insert(bountyAcquisitions).values({
-      bountyRequestId: bounty.id,
-      bountySubmissionId: submission.id,
-      inventoryCopyId: book.id,
-      studentId: submission.studentId,
-      rewardAmount: bounty.rewardAmount,
-      rewardStatus: "paid",
-      rewardPaidAt: paidAt
-    }).returning();
-    await tx.update(bountySubmissions).set({ status: "inventory_confirmed", updatedAt: paidAt }).where(eq(bountySubmissions.id, id));
-    let wallet = await tx.query.wallets.findFirst({
-      where: eq(wallets.userId, submission.studentId)
-    });
-    if (!wallet) {
-      [wallet] = await tx.insert(wallets).values({ userId: submission.studentId, balance: 0 }).returning();
-    }
-    if (bounty.rewardAmount > 0) {
-      await tx.update(wallets).set({
-        balance: sql`${wallets.balance} + ${bounty.rewardAmount}`,
-        updatedAt: paidAt
-      }).where(eq(wallets.id, wallet.id));
-      await tx.insert(walletTransactions).values({
-        walletId: wallet.id,
-        type: "credit",
-        amount: bounty.rewardAmount,
-        description: `Bounty reward: ${bounty.title}`
-      });
-    }
-    const acquiredCount = await tx.select({ n: count() }).from(bountyAcquisitions).where(eq(bountyAcquisitions.bountyRequestId, bounty.id));
-    const fulfilled = Number(acquiredCount[0]?.n ?? 0) >= bounty.quantity;
-    await tx.update(bountyRequests).set({
-      status: fulfilled ? "completed" : "open",
-      updatedAt: /* @__PURE__ */ new Date()
-    }).where(eq(bountyRequests.id, bounty.id));
-    await tryAssignCopyToWaitingRequests(tx, {
-      id: book.id,
-      hubId: book.hubId,
-      title: book.title
-    });
-    return { book, acquisition, alreadyConfirmed: false };
-  });
-  if (result.alreadyConfirmed || !result.book) {
     res.json({
-      alreadyConfirmed: true,
+      book: result.book,
       acquisition: result.acquisition,
       submission: {
         ...serializeSubmission({ ...submission, status: "inventory_confirmed" }),
         ...serializeAcquisition(result.acquisition)
       }
     });
-    return;
   }
-  await logAudit({
-    userId: auth.userId,
-    actorId: auth.userId,
-    hubId: bounty.hubId,
-    action: "BOUNTY_ACQUISITION",
-    resourceType: "book",
-    resourceId: result.book.id,
-    meta: {
-      bountyRequestId: bounty.id,
-      bountySubmissionId: submission.id,
-      rewardAmount: bounty.rewardAmount
-    }
-  });
-  await notifyUser({
-    userId: submission.studentId,
-    kind: "bounty_added_to_inventory",
-    body: `"${bounty.title}" was added to hub inventory. Reward: \u20B9${bounty.rewardAmount.toLocaleString("en-IN")}.`
-  });
-  res.json({
-    book: result.book,
-    acquisition: result.acquisition,
-    submission: {
-      ...serializeSubmission({ ...submission, status: "inventory_confirmed" }),
-      ...serializeAcquisition(result.acquisition)
-    }
-  });
-});
+);
 var bounty_default = router14;
 
 // src/lib/book-cover-storage.ts
@@ -43485,10 +43724,7 @@ function apiRateLimitMiddleware(req, res, next) {
   buckets.set(key, arr);
   res.setHeader("RateLimit-Limit", String(max));
   res.setHeader("RateLimit-Remaining", String(Math.max(0, max - arr.length)));
-  res.setHeader(
-    "RateLimit-Reset",
-    String(resetApprox(now, arr, w))
-  );
+  res.setHeader("RateLimit-Reset", String(resetApprox(now, arr, w)));
   next();
 }
 
@@ -43529,8 +43765,7 @@ function httpStatusFromError(err, chain) {
   if (isDbDown) return 503;
   if (typeof err === "object" && err !== null) {
     const o = err;
-    if (typeof o.status === "number" && o.status >= 400 && o.status < 600)
-      return o.status;
+    if (typeof o.status === "number" && o.status >= 400 && o.status < 600) return o.status;
     if (typeof o.statusCode === "number" && o.statusCode >= 400 && o.statusCode < 600)
       return o.statusCode;
   }
@@ -43590,7 +43825,11 @@ function parseAllowedOrigins() {
     if (s.includes("*")) {
       const m = /^(https?):\/\/\*\.(.+)$/i.exec(s);
       if (!m) return { kind: "exact", origin: s };
-      return { kind: "wildcard", scheme: m[1].toLowerCase(), suffix: `.${m[2]}` };
+      return {
+        kind: "wildcard",
+        scheme: m[1].toLowerCase(),
+        suffix: `.${m[2]}`
+      };
     }
     return { kind: "exact", origin: s };
   });
@@ -43681,12 +43920,7 @@ app.get("/ping", (_req, res) => res.json({ ping: "pong" }));
 app.get("/", (_req, res) => {
   res.type("application/json").json({ status: "ok", service: "phygital-api" });
 });
-app.use(
-  "/api/uploads",
-  authMiddleware,
-  apiRateLimitMiddleware,
-  uploads_default
-);
+app.use("/api/uploads", authMiddleware, apiRateLimitMiddleware, uploads_default);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use("/uploads", express.static(uploadDir));
@@ -43714,9 +43948,7 @@ async function expireStaleAssignmentsWorker() {
   }
 }
 async function expireStaleAssignmentsWorkerInner() {
-  const staleThreshold = new Date(
-    Date.now() - STALE_ASSIGNMENT_HOURS * 60 * 60 * 1e3
-  );
+  const staleThreshold = new Date(Date.now() - STALE_ASSIGNMENT_HOURS * 60 * 60 * 1e3);
   const staleAssignments = await db.select().from(bookRequests).where(
     and(
       inArray(bookRequests.status, ["fulfilled", "ready"]),
@@ -44053,10 +44285,38 @@ async function seedIfEmpty() {
     const [{ c: planCount }] = await db.select({ c: count() }).from(subscriptionPlans);
     if (Number(planCount) === 0) {
       await db.insert(subscriptionPlans).values([
-        { tier: "free", name: "Student Free", target: "student", price: 0, creditReward: 0, isActive: 1 },
-        { tier: "pro", name: "Student Premium", target: "student", price: 299, creditReward: 50, isActive: 1 },
-        { tier: "hub_basic", name: "Hub Basic", target: "hub", price: 0, creditReward: 0, isActive: 1 },
-        { tier: "hub_pro", name: "Hub Pro", target: "hub", price: 999, creditReward: 0, isActive: 1 }
+        {
+          tier: "free",
+          name: "Student Free",
+          target: "student",
+          price: 0,
+          creditReward: 0,
+          isActive: 1
+        },
+        {
+          tier: "pro",
+          name: "Student Premium",
+          target: "student",
+          price: 299,
+          creditReward: 50,
+          isActive: 1
+        },
+        {
+          tier: "hub_basic",
+          name: "Hub Basic",
+          target: "hub",
+          price: 0,
+          creditReward: 0,
+          isActive: 1
+        },
+        {
+          tier: "hub_pro",
+          name: "Hub Pro",
+          target: "hub",
+          price: 999,
+          creditReward: 0,
+          isActive: 1
+        }
       ]);
     }
     const [{ c: hubCount }] = await db.select({ c: count() }).from(hubs);
@@ -44235,9 +44495,9 @@ async function seedIfEmpty() {
         }
       ]);
     }
-    const [{ c: auditCount }] = await db.select({ c: count() }).from(auditLogs2);
+    const [{ c: auditCount }] = await db.select({ c: count() }).from(auditLogs);
     if (Number(auditCount) === 0) {
-      await db.insert(auditLogs2).values([
+      await db.insert(auditLogs).values([
         {
           userId: anya.id,
           hubId: h(0),
@@ -44362,9 +44622,7 @@ async function bootstrapLocalServer() {
       logger.error({ err: e }, "initial worker tick failed");
     }
     setInterval(() => {
-      void runWorkerTick().catch(
-        (e) => logger.error({ err: e }, "worker tick failed")
-      );
+      void runWorkerTick().catch((e) => logger.error({ err: e }, "worker tick failed"));
     }, WORKER_INTERVAL_MS);
   }
 }

@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "typecheck": "tsc -b",
     "build": "tsc -b"
   },
   "exports": {

@@ -5,11 +5,16 @@ export const BOOK_REQUEST_ACTIVE_STATUSES = [
   "lease_requested",
   "lease_approved",
   "lease_active",
-  "lease_return_pending"
+  "lease_return_pending",
 ] as const;
 
 export function isTerminalBookRequest(status: string): boolean {
-  return status === "delivered" || status === "cancelled" || status === "lease_completed" || status === "lease_refunded";
+  return (
+    status === "delivered" ||
+    status === "cancelled" ||
+    status === "lease_completed" ||
+    status === "lease_refunded"
+  );
 }
 
 /** Hub staff may claim an unassigned pending request. */
@@ -32,7 +37,12 @@ export function canConfirmBookRequestDelivery(status: string): boolean {
 
 /** Member may withdraw before collection. */
 export function isValidUserCancelBookRequest(from: string): boolean {
-  return from === "pending" || from === "available_for_collection" || from === "lease_requested" || from === "lease_approved";
+  return (
+    from === "pending" ||
+    from === "available_for_collection" ||
+    from === "lease_requested" ||
+    from === "lease_approved"
+  );
 }
 
 /** Super-admin manual status overrides (audit-logged). */
@@ -43,11 +53,7 @@ export function isValidStaffBookRequestTransition(from: string, to: string): boo
   return false;
 }
 
-const P2P_FORWARD = [
-  "listed",
-  "pending_dropoff",
-  "available",
-] as const;
+const P2P_FORWARD = ["listed", "pending_dropoff", "available"] as const;
 
 export function isValidP2pLinearStep(from: string, to: string): boolean {
   const i = P2P_FORWARD.indexOf(from as (typeof P2P_FORWARD)[number]);
@@ -70,7 +76,9 @@ export function isValidP2pTransition(from: string, to: string): boolean {
 }
 
 export function isTerminalP2p(status: string): boolean {
-  return status === "completed" || status === "sold" || status === "expired" || status === "rejected";
+  return (
+    status === "completed" || status === "sold" || status === "expired" || status === "rejected"
+  );
 }
 
 export function canEditP2pListing(status: string): boolean {

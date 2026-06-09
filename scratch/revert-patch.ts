@@ -1,6 +1,6 @@
-import fs from 'fs';
+import fs from "fs";
 
-let content = fs.readFileSync('src/middleware/cors.ts', 'utf8');
+let content = fs.readFileSync("src/middleware/cors.ts", "utf8");
 
 const newParse = `function parseAllowedOrigins(): OriginRule[] {
   const raw = process.env.ALLOWED_ORIGINS?.trim();
@@ -38,5 +38,8 @@ const newParse = `function parseAllowedOrigins(): OriginRule[] {
   return parsed;
 }`;
 
-content = content.replace(/function parseAllowedOrigins\(\): OriginRule\[\] \{[\s\S]*?return \[\n[\s\S]*?\];\n\}/, newParse);
-fs.writeFileSync('src/middleware/cors.ts', content);
+content = content.replace(
+  /function parseAllowedOrigins\(\): OriginRule\[\] \{[\s\S]*?return \[\n[\s\S]*?\];\n\}/,
+  newParse,
+);
+fs.writeFileSync("src/middleware/cors.ts", content);
