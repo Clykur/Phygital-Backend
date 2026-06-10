@@ -21,6 +21,7 @@ import subscriptionsRouter from "./subscriptions";
 import studentRouter from "./student";
 import bountyRouter from "./bounty";
 import longTermLeasesRouter from "./long-term-leases";
+import geoRouter from "./geo";
 import { getPlaceholderBookCoverPublicUrl } from "../lib/book-cover-storage";
 import { requireAuth } from "../middleware/auth";
 
@@ -34,6 +35,7 @@ router.use(healthRouter);
 router.use("/auth", authRouter);
 router.use("/catalog", catalogRouter);
 router.use("/p2p", p2pRouter);
+router.use("/geo", geoRouter);
 
 // Everything below requires a valid bearer token.
 router.use(requireAuth);

@@ -13016,7 +13016,7 @@ import express from "express";
 import pinoHttp from "pino-http";
 
 // src/routes/index.ts
-import { Router as Router16 } from "express";
+import { Router as Router17 } from "express";
 
 // src/routes/health.ts
 import { Router } from "express";
@@ -17083,7 +17083,9 @@ var registerSchema = external_exports.object({
   address: external_exports.string().optional(),
   city: external_exports.string().optional(),
   district: external_exports.string().optional(),
-  state: external_exports.string().optional()
+  state: external_exports.string().optional(),
+  latitude: external_exports.number().optional(),
+  longitude: external_exports.number().optional()
 }).superRefine((data, ctx) => {
   const t = data.accountType ?? "student";
   if (t !== "hub") return;
@@ -24367,7 +24369,9 @@ var hubs = pgTable("hubs", {
   postalCode: text("postal_code"),
   contactPhone: text("contact_phone"),
   isActive: boolean("is_active").notNull().default(true),
-  capacity: integer("capacity")
+  capacity: integer("capacity"),
+  latitude: doublePrecision("latitude"),
+  longitude: doublePrecision("longitude")
 });
 var memberships = pgTable("memberships", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -35189,6 +35193,8 @@ async function provisionNewPhygitalUser(authUser, meta) {
         name: hName,
         location: hLocation,
         kind: hKind,
+        latitude: meta.latitude,
+        longitude: meta.longitude,
         publicId: await nextHubPublicId()
       }).returning({ id: hubs.id });
       await tx.insert(memberships).values({
@@ -35245,7 +35251,9 @@ var googleLoginSchema = external_exports.object({
   accountType: external_exports.enum(["student", "hub", "user", "super_admin"]).optional(),
   hubLocation: external_exports.string().optional(),
   hubName: external_exports.string().optional(),
-  hubKind: external_exports.string().optional()
+  hubKind: external_exports.string().optional(),
+  latitude: external_exports.number().optional(),
+  longitude: external_exports.number().optional()
 }).refine((d) => Boolean(d.accessToken?.trim() || d.token?.trim()), {
   message: "accessToken or token is required"
 });
@@ -35312,7 +35320,9 @@ function provisionMetaFromBody(data) {
     accountType: data.accountType,
     hubLocation: data.hubLocation,
     hubName: data.hubName,
-    hubKind: data.hubKind
+    hubKind: data.hubKind,
+    latitude: data.latitude,
+    longitude: data.longitude
   };
 }
 async function exchangeSupabaseCredentials(res, opts) {
@@ -35348,7 +35358,9 @@ var sessionSchema = external_exports.object({
   accountType: external_exports.enum(["student", "hub", "user", "super_admin"]).optional(),
   hubLocation: external_exports.string().optional(),
   hubName: external_exports.string().optional(),
-  hubKind: external_exports.string().optional()
+  hubKind: external_exports.string().optional(),
+  latitude: external_exports.number().optional(),
+  longitude: external_exports.number().optional()
 });
 router2.post("/session", async (req, res) => {
   const parsed = sessionSchema.safeParse(req.body);
@@ -35414,7 +35426,9 @@ router2.post("/register", async (req, res) => {
           accountType,
           hubLocation: parsed.data.hubLocation,
           hubName: parsed.data.hubName,
-          hubKind: parsed.data.hubKind
+          hubKind: parsed.data.hubKind,
+          latitude: parsed.data.latitude,
+          longitude: parsed.data.longitude
         };
         const { userId, isNewUser } = await resolvePhygitalUserId(data.user, meta);
         await issueAppTokens(res, userId, isNewUser);
@@ -35485,6 +35499,8 @@ router2.post("/register", async (req, res) => {
           state: parsed.data.state,
           postalCode: parsed.data.postalCode,
           contactPhone: parsed.data.phone,
+          latitude: parsed.data.latitude,
+          longitude: parsed.data.longitude,
           publicId: await nextHubPublicId()
         }).returning({ id: hubs.id });
         await tx.insert(memberships).values({
@@ -35767,6 +35783,32 @@ async function getInventoryStatsForTitles(hubId, titles) {
   return statsMap;
 }
 
+// src/lib/geo.ts
+var EARTH_RADIUS_KM = 6371.0088;
+function toRad(degrees) {
+  return degrees * Math.PI / 180;
+}
+function validateCoordinates(lat, lng) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (lat === 0 && lng === 0) return false;
+  if (lat < -90 || lat > 90) return false;
+  if (lng < -180 || lng > 180) return false;
+  return true;
+}
+function haversineDistance(lat1, lon1, lat2, lon2) {
+  if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return NaN;
+  if (lat1 === lat2 && lon1 === lon2) return 0;
+  const \u03C61 = toRad(lat1);
+  const \u03C62 = toRad(lat2);
+  const \u0394\u03C6 = toRad(lat2 - lat1);
+  const \u0394\u03BB = toRad(lon2 - lon1);
+  const sin\u0394\u03C62 = Math.sin(\u0394\u03C6 / 2);
+  const sin\u0394\u03BB2 = Math.sin(\u0394\u03BB / 2);
+  const a = sin\u0394\u03C62 * sin\u0394\u03C62 + Math.cos(\u03C61) * Math.cos(\u03C62) * sin\u0394\u03BB2 * sin\u0394\u03BB2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return EARTH_RADIUS_KM * c;
+}
+
 // src/routes/catalog.ts
 var router3 = Router3();
 function escapeIlikePattern(s) {
@@ -35871,30 +35913,69 @@ router3.get("/books", authMiddleware, async (req, res) => {
   await reconcileOverdueBooks();
   const rawQ = typeof req.query["q"] === "string" ? req.query["q"].trim() : "";
   const availableOnly = req.query["availableOnly"] === "1" || req.query["availableOnly"] === "true";
+  let rows;
   if (rawQ.length > 0) {
     const pattern = `%${escapeIlikePattern(rawQ)}%`;
     const whereClause = availableOnly ? and(ilike(books.title, pattern), eq(books.status, "available"), notInterHubTransfer) : and(ilike(books.title, pattern), notInterHubTransfer);
-    const rows2 = await fromActiveHubBooks().where(whereClause).orderBy(desc(books.createdAt), desc(books.id));
-    const booksPayload2 = await enrichBooksAcquiredFromHubNames(rows2.map((r) => r.b));
-    const merged2 = await mergeStudentLeases(booksPayload2, req.auth);
-    res.json({ books: await attachInventoryStats(merged2) });
-    return;
+    rows = await fromActiveHubBooks().where(whereClause).orderBy(desc(books.createdAt), desc(books.id));
+  } else if (availableOnly) {
+    rows = await fromActiveHubBooks().where(and(eq(books.status, "available"), notInterHubTransfer)).orderBy(desc(books.createdAt), desc(books.id));
+  } else {
+    rows = await fromActiveHubBooks().where(notInterHubTransfer).orderBy(desc(books.createdAt), desc(books.id));
   }
-  if (availableOnly) {
-    const rows2 = await fromActiveHubBooks().where(and(eq(books.status, "available"), notInterHubTransfer)).orderBy(desc(books.createdAt), desc(books.id));
-    const booksPayload2 = await enrichBooksAcquiredFromHubNames(rows2.map((r) => r.b));
-    const merged2 = await mergeStudentLeases(booksPayload2, req.auth);
-    res.json({ books: await attachInventoryStats(merged2) });
-    return;
-  }
-  const rows = await fromActiveHubBooks().where(notInterHubTransfer).orderBy(desc(books.createdAt), desc(books.id));
   const booksPayload = await enrichBooksAcquiredFromHubNames(rows.map((r) => r.b));
   const merged = await mergeStudentLeases(booksPayload, req.auth);
-  res.json({ books: await attachInventoryStats(merged) });
+  const finalMerged = await attachInventoryStats(merged);
+  const latParam = req.query["lat"];
+  const lngParam = req.query["lng"];
+  const userLat = latParam ? Number(latParam) : null;
+  const userLng = lngParam ? Number(lngParam) : null;
+  if (userLat !== null && !Number.isNaN(userLat) && userLng !== null && !Number.isNaN(userLng)) {
+    const activeHubs = await db.select().from(hubs).where(eq(hubs.isActive, true));
+    const hubsMap = new Map(activeHubs.map((h) => [h.id, h]));
+    const booksWithDistance = finalMerged.map((b) => {
+      const hub = hubsMap.get(b.hubId);
+      let distanceKm = null;
+      if (hub && hub.latitude !== null && hub.longitude !== null) {
+        distanceKm = haversineDistance(userLat, userLng, hub.latitude, hub.longitude);
+      }
+      return { ...b, distanceKm };
+    });
+    booksWithDistance.sort((a, b) => {
+      if (a.distanceKm === null && b.distanceKm === null) return 0;
+      if (a.distanceKm === null) return 1;
+      if (b.distanceKm === null) return -1;
+      return a.distanceKm - b.distanceKm;
+    });
+    res.json({ books: booksWithDistance });
+    return;
+  }
+  res.json({ books: finalMerged.map((b) => ({ ...b, distanceKm: null })) });
 });
-router3.get("/hubs", authMiddleware, async (_req, res) => {
+router3.get("/hubs", authMiddleware, async (req, res) => {
   const rows = await db.select().from(hubs).where(eq(hubs.isActive, true));
-  res.json({ hubs: rows });
+  const latParam = req.query["lat"];
+  const lngParam = req.query["lng"];
+  const userLat = latParam ? Number(latParam) : null;
+  const userLng = lngParam ? Number(lngParam) : null;
+  if (userLat !== null && !Number.isNaN(userLat) && userLng !== null && !Number.isNaN(userLng)) {
+    const hubsWithDistance = rows.map((h) => {
+      let distanceKm = null;
+      if (h.latitude !== null && h.longitude !== null) {
+        distanceKm = haversineDistance(userLat, userLng, h.latitude, h.longitude);
+      }
+      return { ...h, distanceKm };
+    });
+    hubsWithDistance.sort((a, b) => {
+      if (a.distanceKm === null && b.distanceKm === null) return 0;
+      if (a.distanceKm === null) return 1;
+      if (b.distanceKm === null) return -1;
+      return a.distanceKm - b.distanceKm;
+    });
+    res.json({ hubs: hubsWithDistance });
+    return;
+  }
+  res.json({ hubs: rows.map((h) => ({ ...h, distanceKm: null })) });
 });
 var catalog_default = router3;
 
@@ -38147,18 +38228,43 @@ router7.get("/listings", authMiddleware, async (_req, res) => {
   }).from(p2pListings).leftJoin(users, eq(p2pListings.buyerId, users.id)).leftJoin(books, eq(books.listingId, p2pListings.id));
   const titles = [...new Set(rows.map((r) => r.listing.bookTitle))].filter(Boolean);
   const statsMap = await getInventoryStatsForTitles(null, titles);
-  res.json({
-    listings: rows.map((r) => ({
-      ...r.listing,
-      buyerBaseRole: r.buyerBaseRole ?? null,
-      refId: r.refId ?? null,
-      inventoryStats: statsMap[`${r.listing.hubId}:${r.listing.bookTitle}`] ?? {
-        total: 0,
-        available: 0,
-        issued: 0,
-        reserved: 0
+  const finalPayload = rows.map((r) => ({
+    ...r.listing,
+    buyerBaseRole: r.buyerBaseRole ?? null,
+    refId: r.refId ?? null,
+    inventoryStats: statsMap[`${r.listing.hubId}:${r.listing.bookTitle}`] ?? {
+      total: 0,
+      available: 0,
+      issued: 0,
+      reserved: 0
+    }
+  }));
+  const latParam = _req.query["lat"];
+  const lngParam = _req.query["lng"];
+  const userLat = latParam ? Number(latParam) : null;
+  const userLng = lngParam ? Number(lngParam) : null;
+  if (userLat !== null && !Number.isNaN(userLat) && userLng !== null && !Number.isNaN(userLng)) {
+    const activeHubs = await db.select().from(hubs).where(eq(hubs.isActive, true));
+    const hubsMap = new Map(activeHubs.map((h) => [h.id, h]));
+    const listingsWithDistance = finalPayload.map((l) => {
+      const hub = hubsMap.get(l.hubId);
+      let distanceKm = null;
+      if (hub && hub.latitude !== null && hub.longitude !== null) {
+        distanceKm = haversineDistance(userLat, userLng, hub.latitude, hub.longitude);
       }
-    }))
+      return { ...l, distanceKm };
+    });
+    listingsWithDistance.sort((a, b) => {
+      if (a.distanceKm === null && b.distanceKm === null) return 0;
+      if (a.distanceKm === null) return 1;
+      if (b.distanceKm === null) return -1;
+      return a.distanceKm - b.distanceKm;
+    });
+    res.json({ listings: listingsWithDistance });
+    return;
+  }
+  res.json({
+    listings: finalPayload.map((l) => ({ ...l, distanceKm: null }))
   });
 });
 router7.post("/listings", authMiddleware, requireAuth, async (req, res) => {
@@ -41689,9 +41795,11 @@ var patchHubSchema = external_exports.object({
   location: external_exports.string().min(1).max(500).optional(),
   kind: hubKindSchema2.optional(),
   isActive: external_exports.boolean().optional(),
-  capacity: external_exports.number().int().min(0).nullable().optional()
+  capacity: external_exports.number().int().min(0).nullable().optional(),
+  latitude: external_exports.number().nullable().optional(),
+  longitude: external_exports.number().nullable().optional()
 }).strict().refine(
-  (b) => b.name != null || b.location != null || b.kind != null || b.isActive != null || b.capacity !== void 0,
+  (b) => b.name != null || b.location != null || b.kind != null || b.isActive != null || b.capacity !== void 0 || b.latitude !== void 0 || b.longitude !== void 0,
   { message: "No changes" }
 );
 function escapeIlikePattern3(s) {
@@ -42267,7 +42375,9 @@ router10.patch("/hubs/:hubId", requireSuperAdmin, async (req, res) => {
     ...b.location != null ? { location: b.location } : {},
     ...b.kind != null ? { kind: b.kind } : {},
     ...b.isActive != null ? { isActive: b.isActive } : {},
-    ...b.capacity !== void 0 ? { capacity: b.capacity } : {}
+    ...b.capacity !== void 0 ? { capacity: b.capacity } : {},
+    ...b.latitude !== void 0 ? { latitude: b.latitude } : {},
+    ...b.longitude !== void 0 ? { longitude: b.longitude } : {}
   }).where(eq(hubs.id, hubId)).returning();
   if (!updated) {
     res.status(404).json({ error: "Hub not found" });
@@ -42285,7 +42395,9 @@ router10.patch("/hubs/:hubId", requireSuperAdmin, async (req, res) => {
       location: b.location,
       kind: b.kind,
       isActive: b.isActive,
-      capacity: b.capacity
+      capacity: b.capacity,
+      latitude: b.latitude,
+      longitude: b.longitude
     }
   });
   res.json({
@@ -42296,7 +42408,9 @@ router10.patch("/hubs/:hubId", requireSuperAdmin, async (req, res) => {
       location: updated.location,
       kind: updated.kind,
       isActive: updated.isActive,
-      capacity: updated.capacity
+      capacity: updated.capacity,
+      latitude: updated.latitude,
+      longitude: updated.longitude
     }
   });
 });
@@ -43964,6 +44078,49 @@ router15.get("/my", authMiddleware, requireAuth, async (req, res) => {
 });
 var long_term_leases_default = router15;
 
+// src/routes/geo.ts
+import { Router as Router16 } from "express";
+var router16 = Router16();
+router16.get("/reverse-geocode", async (req, res) => {
+  const { latitude, longitude } = req.query;
+  if (!latitude || !longitude) {
+    res.status(400).json({ error: "Missing latitude or longitude" });
+    return;
+  }
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  if (Number.isNaN(lat) || Number.isNaN(lng) || !validateCoordinates(lat, lng)) {
+    res.status(400).json({ error: "Invalid coordinates" });
+    return;
+  }
+  try {
+    const url = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`;
+    const response = await fetch(url, {
+      headers: { Accept: "application/json" }
+    });
+    if (!response.ok) {
+      res.status(response.status).json({ error: "Failed to fetch address from geocoding service" });
+      return;
+    }
+    const data = await response.json();
+    const responseData = {
+      city: data.city || data.locality || "",
+      region: data.principalSubdivision || "",
+      countryCode: data.countryCode || "",
+      countryName: data.countryName || "",
+      latitude: data.latitude || lat,
+      longitude: data.longitude || lng,
+      address_line1: data.locality || data.city || "",
+      postal_code: data.postcode || ""
+    };
+    res.json({ success: true, data: responseData });
+  } catch (error) {
+    console.error("[GeoRouter] reverse-geocode error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+var geo_default = router16;
+
 // src/lib/book-cover-storage.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import fs3 from "node:fs/promises";
@@ -44030,32 +44187,33 @@ async function saveBookCoverImage(opts) {
 }
 
 // src/routes/index.ts
-var router16 = Router16();
-router16.get("/placeholder-book-cover-url", (req, res) => {
+var router17 = Router17();
+router17.get("/placeholder-book-cover-url", (req, res) => {
   res.json({ url: getPlaceholderBookCoverPublicUrl() });
 });
-router16.use(health_default);
-router16.use("/auth", auth_default);
-router16.use("/catalog", catalog_default);
-router16.use("/p2p", p2p_default);
-router16.use(requireAuth);
-router16.use("/books", books_default);
-router16.use("/book-requests", book_requests_default);
-router16.use("/notifications", notifications_default);
-router16.use("/hub", hub_default);
-router16.use("/activity", activity_default);
-router16.use("/admin", admin_default);
-router16.use("/wallet", wallet_default);
-router16.use("/subscriptions", subscriptions_default);
-router16.use("/student", student_default);
-router16.use("/bounty", bounty_default);
-router16.use("/long-term-leases", long_term_leases_default);
-var routes_default = router16;
+router17.use(health_default);
+router17.use("/auth", auth_default);
+router17.use("/catalog", catalog_default);
+router17.use("/p2p", p2p_default);
+router17.use("/geo", geo_default);
+router17.use(requireAuth);
+router17.use("/books", books_default);
+router17.use("/book-requests", book_requests_default);
+router17.use("/notifications", notifications_default);
+router17.use("/hub", hub_default);
+router17.use("/activity", activity_default);
+router17.use("/admin", admin_default);
+router17.use("/wallet", wallet_default);
+router17.use("/subscriptions", subscriptions_default);
+router17.use("/student", student_default);
+router17.use("/bounty", bounty_default);
+router17.use("/long-term-leases", long_term_leases_default);
+var routes_default = router17;
 
 // src/routes/uploads.ts
-import { Router as Router17 } from "express";
+import { Router as Router18 } from "express";
 import multer from "multer";
-var router17 = Router17();
+var router18 = Router18();
 var allowed = /* @__PURE__ */ new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 var upload = multer({
   storage: multer.memoryStorage(),
@@ -44068,7 +44226,7 @@ var upload = multer({
     cb(new Error("Only JPEG, PNG, WebP, or GIF images are allowed."));
   }
 });
-router17.post("/book-cover", requireAuth, (req, res) => {
+router18.post("/book-cover", requireAuth, (req, res) => {
   upload.single("image")(req, res, (err) => {
     void (async () => {
       if (err) {
@@ -44094,7 +44252,7 @@ router17.post("/book-cover", requireAuth, (req, res) => {
     })();
   });
 });
-router17.post("/profile-image", requireAuth, (req, res) => {
+router18.post("/profile-image", requireAuth, (req, res) => {
   upload.single("image")(req, res, (err) => {
     void (async () => {
       if (err) {
@@ -44126,7 +44284,7 @@ router17.post("/profile-image", requireAuth, (req, res) => {
     })();
   });
 });
-var uploads_default = router17;
+var uploads_default = router18;
 
 // src/middleware/api-rate-limit.ts
 var buckets = /* @__PURE__ */ new Map();
@@ -45114,6 +45272,13 @@ async function bootstrapLocalServer() {
   const enableSeed = process.env.ENABLE_SEED === "1" || process.env.ENABLE_SEED === "true";
   const enableWorkers = process.env.ENABLE_WORKERS === "1" || process.env.ENABLE_WORKERS === "true";
   if (!isProd2 || enableSeed) {
+    try {
+      await pool.query('ALTER TABLE "hubs" ADD COLUMN IF NOT EXISTS "latitude" double precision;');
+      await pool.query('ALTER TABLE "hubs" ADD COLUMN IF NOT EXISTS "longitude" double precision;');
+      logger.info("Executed latitude/longitude migrations successfully");
+    } catch (e) {
+      logger.error({ err: e }, "Failed to run custom migrations");
+    }
     try {
       await ensurePublicReadableIds();
     } catch (e) {

@@ -19,6 +19,8 @@ export type ProvisionMeta = {
   hubName?: string;
   hubKind?: string;
   name?: string;
+  latitude?: number;
+  longitude?: number;
 };
 
 function normalizeAccountType(accountType: string | undefined): "student" | "hub" | "super_admin" {
@@ -102,6 +104,8 @@ async function provisionNewPhygitalUser(
           name: hName,
           location: hLocation,
           kind: hKind,
+          latitude: meta.latitude,
+          longitude: meta.longitude,
           publicId: await nextHubPublicId(),
         })
         .returning({ id: hubs.id });

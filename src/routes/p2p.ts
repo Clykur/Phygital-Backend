@@ -13,7 +13,9 @@ import {
   wallets,
   subscriptions,
   walletTransactions,
+  hubs,
 } from "@workspace/db/schema";
+import { haversineDistance } from "../lib/geo";
 import { ACTIONS } from "../lib/rbac/actions";
 import { authorize } from "../lib/rbac/authorize";
 import { canEditP2pListing, isValidP2pTransition } from "../lib/state-machines";
@@ -70,18 +72,48 @@ router.get("/listings", authMiddleware, async (_req, res) => {
   const titles = [...new Set(rows.map((r) => r.listing.bookTitle))].filter(Boolean) as string[];
   const statsMap = await getInventoryStatsForTitles(null, titles);
 
+  const finalPayload = rows.map((r) => ({
+    ...r.listing,
+    buyerBaseRole: r.buyerBaseRole ?? null,
+    refId: r.refId ?? null,
+    inventoryStats: statsMap[`${r.listing.hubId}:${r.listing.bookTitle}`] ?? {
+      total: 0,
+      available: 0,
+      issued: 0,
+      reserved: 0,
+    },
+  }));
+
+  const latParam = _req.query["lat"];
+  const lngParam = _req.query["lng"];
+  const userLat = latParam ? Number(latParam) : null;
+  const userLng = lngParam ? Number(lngParam) : null;
+
+  if (userLat !== null && !Number.isNaN(userLat) && userLng !== null && !Number.isNaN(userLng)) {
+    const activeHubs = await db.select().from(hubs).where(eq(hubs.isActive, true));
+    const hubsMap = new Map(activeHubs.map((h) => [h.id, h]));
+    const listingsWithDistance = finalPayload.map((l) => {
+      const hub = hubsMap.get(l.hubId);
+      let distanceKm: number | null = null;
+      if (hub && hub.latitude !== null && hub.longitude !== null) {
+        distanceKm = haversineDistance(userLat, userLng, hub.latitude, hub.longitude);
+      }
+      return { ...l, distanceKm };
+    });
+
+    listingsWithDistance.sort((a, b) => {
+      if (a.distanceKm === null && b.distanceKm === null) return 0;
+      if (a.distanceKm === null) return 1;
+      if (b.distanceKm === null) return -1;
+      return a.distanceKm - b.distanceKm;
+    });
+
+    res.json({ listings: listingsWithDistance });
+    return;
+  }
+
   res.json({
-    listings: rows.map((r) => ({
-      ...r.listing,
-      buyerBaseRole: r.buyerBaseRole ?? null,
-      refId: r.refId ?? null,
-      inventoryStats: statsMap[`${r.listing.hubId}:${r.listing.bookTitle}`] ?? {
-        total: 0,
-        available: 0,
-        issued: 0,
-        reserved: 0,
-      },
-    })),
+    listings: finalPayload.map((l) => ({ ...l, distanceKm: null })),
   });
 });
 

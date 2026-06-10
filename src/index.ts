@@ -34,6 +34,14 @@ async function bootstrapLocalServer(): Promise<void> {
   // This prevents the API from spamming errors / failing requests when the DB is temporarily unreachable.
   if (!isProd || enableSeed) {
     try {
+      await pool.query('ALTER TABLE "hubs" ADD COLUMN IF NOT EXISTS "latitude" double precision;');
+      await pool.query('ALTER TABLE "hubs" ADD COLUMN IF NOT EXISTS "longitude" double precision;');
+      logger.info("Executed latitude/longitude migrations successfully");
+    } catch (e) {
+      logger.error({ err: e }, "Failed to run custom migrations");
+    }
+
+    try {
       await ensurePublicReadableIds();
     } catch (e) {
       logger.error({ err: e }, "ensurePublicReadableIds failed");

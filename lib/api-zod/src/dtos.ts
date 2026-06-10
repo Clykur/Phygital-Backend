@@ -24,6 +24,8 @@ export const registerSchema = z
     city: z.string().optional(),
     district: z.string().optional(),
     state: z.string().optional(),
+    latitude: z.number().optional(),
+    longitude: z.number().optional(),
   })
   .superRefine((data, ctx) => {
     const t = data.accountType ?? "student";

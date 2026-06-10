@@ -37,6 +37,8 @@ const googleLoginSchema = z
     hubLocation: z.string().optional(),
     hubName: z.string().optional(),
     hubKind: z.string().optional(),
+    latitude: z.number().optional(),
+    longitude: z.number().optional(),
   })
   .refine((d) => Boolean(d.accessToken?.trim() || d.token?.trim()), {
     message: "accessToken or token is required",
@@ -126,12 +128,16 @@ function provisionMetaFromBody(data: {
   hubLocation?: string;
   hubName?: string;
   hubKind?: string;
+  latitude?: number;
+  longitude?: number;
 }): ProvisionMeta {
   return {
     accountType: data.accountType,
     hubLocation: data.hubLocation,
     hubName: data.hubName,
     hubKind: data.hubKind,
+    latitude: data.latitude,
+    longitude: data.longitude,
   };
 }
 
@@ -181,6 +187,8 @@ const sessionSchema = z.object({
   hubLocation: z.string().optional(),
   hubName: z.string().optional(),
   hubKind: z.string().optional(),
+  latitude: z.number().optional(),
+  longitude: z.number().optional(),
 });
 
 /** Exchange a Supabase Auth access token (email or OAuth) for the app JWT + profile. */
@@ -253,6 +261,8 @@ router.post("/register", async (req, res) => {
           hubLocation: parsed.data.hubLocation,
           hubName: parsed.data.hubName,
           hubKind: parsed.data.hubKind,
+          latitude: parsed.data.latitude,
+          longitude: parsed.data.longitude,
         };
         const { userId, isNewUser } = await resolvePhygitalUserId(data.user, meta);
         await issueAppTokens(res, userId, isNewUser);
@@ -341,6 +351,8 @@ router.post("/register", async (req, res) => {
             state: parsed.data.state,
             postalCode: parsed.data.postalCode,
             contactPhone: parsed.data.phone,
+            latitude: parsed.data.latitude,
+            longitude: parsed.data.longitude,
             publicId: await nextHubPublicId(),
           })
           .returning({ id: hubs.id });

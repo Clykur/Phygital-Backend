@@ -10,6 +10,7 @@ import { authMiddleware } from "../middleware/auth";
 import { reconcileOverdueBooks } from "../lib/books-lifecycle";
 import { enrichBooksAcquiredFromHubNames } from "../lib/book-acquired-from";
 import { getInventoryStatsForTitles } from "../lib/inventory-stats";
+import { haversineDistance } from "../lib/geo";
 
 const router: IRouter = Router();
 
@@ -141,41 +142,88 @@ router.get("/books", authMiddleware, async (req, res) => {
   const rawQ = typeof req.query["q"] === "string" ? req.query["q"].trim() : "";
   const availableOnly = req.query["availableOnly"] === "1" || req.query["availableOnly"] === "true";
 
+  let rows;
   if (rawQ.length > 0) {
     const pattern = `%${escapeIlikePattern(rawQ)}%`;
     const whereClause = availableOnly
       ? and(ilike(books.title, pattern), eq(books.status, "available"), notInterHubTransfer)
       : and(ilike(books.title, pattern), notInterHubTransfer);
-    const rows = await fromActiveHubBooks()
+    rows = await fromActiveHubBooks()
       .where(whereClause)
       .orderBy(desc(books.createdAt), desc(books.id));
-    const booksPayload = await enrichBooksAcquiredFromHubNames(rows.map((r) => r.b));
-    const merged = await mergeStudentLeases(booksPayload, req.auth);
-    res.json({ books: await attachInventoryStats(merged) });
-    return;
-  }
-
-  if (availableOnly) {
-    const rows = await fromActiveHubBooks()
+  } else if (availableOnly) {
+    rows = await fromActiveHubBooks()
       .where(and(eq(books.status, "available"), notInterHubTransfer))
       .orderBy(desc(books.createdAt), desc(books.id));
-    const booksPayload = await enrichBooksAcquiredFromHubNames(rows.map((r) => r.b));
-    const merged = await mergeStudentLeases(booksPayload, req.auth);
-    res.json({ books: await attachInventoryStats(merged) });
+  } else {
+    rows = await fromActiveHubBooks()
+      .where(notInterHubTransfer)
+      .orderBy(desc(books.createdAt), desc(books.id));
+  }
+
+  const booksPayload = await enrichBooksAcquiredFromHubNames(rows.map((r) => r.b));
+  const merged = await mergeStudentLeases(booksPayload, req.auth);
+  const finalMerged = await attachInventoryStats(merged);
+
+  const latParam = req.query["lat"];
+  const lngParam = req.query["lng"];
+  const userLat = latParam ? Number(latParam) : null;
+  const userLng = lngParam ? Number(lngParam) : null;
+
+  if (userLat !== null && !Number.isNaN(userLat) && userLng !== null && !Number.isNaN(userLng)) {
+    const activeHubs = await db.select().from(hubs).where(eq(hubs.isActive, true));
+    const hubsMap = new Map(activeHubs.map((h) => [h.id, h]));
+    const booksWithDistance = finalMerged.map((b) => {
+      const hub = hubsMap.get(b.hubId);
+      let distanceKm: number | null = null;
+      if (hub && hub.latitude !== null && hub.longitude !== null) {
+        distanceKm = haversineDistance(userLat, userLng, hub.latitude, hub.longitude);
+      }
+      return { ...b, distanceKm };
+    });
+
+    booksWithDistance.sort((a, b) => {
+      if (a.distanceKm === null && b.distanceKm === null) return 0;
+      if (a.distanceKm === null) return 1;
+      if (b.distanceKm === null) return -1;
+      return a.distanceKm - b.distanceKm;
+    });
+
+    res.json({ books: booksWithDistance });
     return;
   }
 
-  const rows = await fromActiveHubBooks()
-    .where(notInterHubTransfer)
-    .orderBy(desc(books.createdAt), desc(books.id));
-  const booksPayload = await enrichBooksAcquiredFromHubNames(rows.map((r) => r.b));
-  const merged = await mergeStudentLeases(booksPayload, req.auth);
-  res.json({ books: await attachInventoryStats(merged) });
+  res.json({ books: finalMerged.map((b) => ({ ...b, distanceKm: null })) });
 });
 
-router.get("/hubs", authMiddleware, async (_req, res) => {
+router.get("/hubs", authMiddleware, async (req, res) => {
   const rows = await db.select().from(hubs).where(eq(hubs.isActive, true));
-  res.json({ hubs: rows });
+  const latParam = req.query["lat"];
+  const lngParam = req.query["lng"];
+  const userLat = latParam ? Number(latParam) : null;
+  const userLng = lngParam ? Number(lngParam) : null;
+
+  if (userLat !== null && !Number.isNaN(userLat) && userLng !== null && !Number.isNaN(userLng)) {
+    const hubsWithDistance = rows.map((h) => {
+      let distanceKm: number | null = null;
+      if (h.latitude !== null && h.longitude !== null) {
+        distanceKm = haversineDistance(userLat, userLng, h.latitude, h.longitude);
+      }
+      return { ...h, distanceKm };
+    });
+
+    hubsWithDistance.sort((a, b) => {
+      if (a.distanceKm === null && b.distanceKm === null) return 0;
+      if (a.distanceKm === null) return 1;
+      if (b.distanceKm === null) return -1;
+      return a.distanceKm - b.distanceKm;
+    });
+
+    res.json({ hubs: hubsWithDistance });
+    return;
+  }
+
+  res.json({ hubs: rows.map((h) => ({ ...h, distanceKm: null })) });
 });
 
 export default router;

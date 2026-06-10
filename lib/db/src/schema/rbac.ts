@@ -9,6 +9,7 @@ import {
   uniqueIndex,
   index,
   check,
+  doublePrecision,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -61,6 +62,8 @@ export const hubs = pgTable("hubs", {
 
   isActive: boolean("is_active").notNull().default(true),
   capacity: integer("capacity"),
+  latitude: doublePrecision("latitude"),
+  longitude: doublePrecision("longitude"),
 });
 export const memberships = pgTable("memberships", {
   id: uuid("id").primaryKey().defaultRandom(),

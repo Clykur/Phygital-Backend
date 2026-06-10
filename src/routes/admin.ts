@@ -50,6 +50,8 @@ const patchHubSchema = z
     kind: hubKindSchema.optional(),
     isActive: z.boolean().optional(),
     capacity: z.number().int().min(0).nullable().optional(),
+    latitude: z.number().nullable().optional(),
+    longitude: z.number().nullable().optional(),
   })
   .strict()
   .refine(
@@ -58,7 +60,9 @@ const patchHubSchema = z
       b.location != null ||
       b.kind != null ||
       b.isActive != null ||
-      b.capacity !== undefined,
+      b.capacity !== undefined ||
+      b.latitude !== undefined ||
+      b.longitude !== undefined,
     { message: "No changes" },
   );
 
@@ -782,6 +786,8 @@ router.patch("/hubs/:hubId", requireSuperAdmin, async (req, res) => {
       ...(b.kind != null ? { kind: b.kind } : {}),
       ...(b.isActive != null ? { isActive: b.isActive } : {}),
       ...(b.capacity !== undefined ? { capacity: b.capacity } : {}),
+      ...(b.latitude !== undefined ? { latitude: b.latitude } : {}),
+      ...(b.longitude !== undefined ? { longitude: b.longitude } : {}),
     })
     .where(eq(hubs.id, hubId))
     .returning();
@@ -802,6 +808,8 @@ router.patch("/hubs/:hubId", requireSuperAdmin, async (req, res) => {
       kind: b.kind,
       isActive: b.isActive,
       capacity: b.capacity,
+      latitude: b.latitude,
+      longitude: b.longitude,
     },
   });
   res.json({
@@ -813,6 +821,8 @@ router.patch("/hubs/:hubId", requireSuperAdmin, async (req, res) => {
       kind: updated.kind,
       isActive: updated.isActive,
       capacity: updated.capacity,
+      latitude: updated.latitude,
+      longitude: updated.longitude,
     },
   });
 });
