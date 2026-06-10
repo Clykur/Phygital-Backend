@@ -7,6 +7,7 @@ import {
   wallets,
   subscriptions,
   walletTransactions,
+  longTermLeases,
 } from "@workspace/db/schema";
 import { ACTIONS } from "../lib/rbac/actions";
 import { authorize } from "../lib/rbac/authorize";
@@ -508,6 +509,20 @@ router.post("/:bookId/return", authMiddleware, requireAuth, async (req, res) => 
         updatedAt: now,
       })
       .where(and(eq(books.id, bookId), eq(books.status, "checked_out")));
+
+    await tx
+      .update(longTermLeases)
+      .set({
+        status: "completed",
+        completedAt: now,
+      })
+      .where(
+        and(
+          eq(longTermLeases.bookId, bookId),
+          eq(longTermLeases.userId, auth.userId),
+          inArray(longTermLeases.status, ["active", "return_pending"]),
+        ),
+      );
     await logAudit({
       userId: auth.userId,
       actorId: auth.userId,

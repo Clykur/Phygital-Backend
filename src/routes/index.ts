@@ -20,6 +20,7 @@ import walletRouter from "./wallet";
 import subscriptionsRouter from "./subscriptions";
 import studentRouter from "./student";
 import bountyRouter from "./bounty";
+import longTermLeasesRouter from "./long-term-leases";
 import { getPlaceholderBookCoverPublicUrl } from "../lib/book-cover-storage";
 import { requireAuth } from "../middleware/auth";
 
@@ -47,4 +48,5 @@ router.use("/wallet", walletRouter);
 router.use("/subscriptions", subscriptionsRouter);
 router.use("/student", studentRouter);
 router.use("/bounty", bountyRouter);
+router.use("/long-term-leases", longTermLeasesRouter);
 export default router;

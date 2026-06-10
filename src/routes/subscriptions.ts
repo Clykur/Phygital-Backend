@@ -236,4 +236,66 @@ router.post("/verify", async (req, res) => {
   }
 });
 
+// NEW API ENDPOINT FOR PRO STUDENT SUBSCRIPTION PLAN ACTIVATION
+const subscribeSchema = z.object({
+  tier: z.enum(["free", "pro"]),
+});
+
+router.post("/subscribe", async (req, res) => {
+  const parsed = subscribeSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Invalid payload" });
+  }
+
+  const { tier } = parsed.data;
+
+  const [plan] = await db
+    .select()
+    .from(subscriptionPlans)
+    .where(
+      and(
+        eq(subscriptionPlans.tier, tier),
+        eq(subscriptionPlans.target, "student"),
+        eq(subscriptionPlans.isActive, 1),
+      ),
+    )
+    .limit(1);
+
+  if (!plan) {
+    return res.status(404).json({ error: "Plan not found" });
+  }
+
+  const [existing] = await db
+    .select()
+    .from(userSubscriptions)
+    .where(eq(userSubscriptions.userId, req.auth!.userId))
+    .limit(1);
+
+  if (existing) {
+    await db
+      .update(userSubscriptions)
+      .set({
+        planId: plan.id,
+        status: "pending",
+        updatedAt: new Date(),
+      })
+      .where(eq(userSubscriptions.id, existing.id));
+  } else {
+    const now = new Date();
+    await db.insert(userSubscriptions).values({
+      userId: req.auth!.userId,
+      planId: plan.id,
+      status: "pending",
+      currentPeriodStart: now,
+      currentPeriodEnd: now,
+    });
+  }
+
+  res.json({
+    success: true,
+    message: "Subscription request submitted for admin approval.",
+  });
+});
+
 export default router;

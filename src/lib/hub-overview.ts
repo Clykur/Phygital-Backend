@@ -606,7 +606,14 @@ export async function buildHubOverviewPayload(
     .where(
       and(
         inArray(bountyRequests.hubId, effective),
-        inArray(bountyRequests.status, ["open", "pending_student_delivery", "under_review"]),
+        inArray(bountyRequests.status, [
+          "open",
+          "pending_student_delivery",
+          "under_review",
+          "approved",
+          "completed",
+          "closed",
+        ]),
       ),
     );
   const bountyOpenRequests = Number(bountyOpenRows[0]?.n ?? 0);
@@ -646,17 +653,7 @@ export async function buildHubOverviewPayload(
       total: sql<number>`coalesce(sum(${bountyRequests.rewardAmount} * ${bountyRequests.quantity}), 0)`,
     })
     .from(bountyRequests)
-    .where(
-      and(
-        inArray(bountyRequests.hubId, effective),
-        inArray(bountyRequests.status, [
-          "open",
-          "pending_student_delivery",
-          "under_review",
-          "approved",
-        ]),
-      ),
-    );
+    .where(inArray(bountyRequests.hubId, effective));
   const bountyTotalRewardValue = Number(bountyRewardRows[0]?.total ?? 0);
 
   if (bountyPendingDeliveries > 0) {

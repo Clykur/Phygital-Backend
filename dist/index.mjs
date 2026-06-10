@@ -13016,7 +13016,7 @@ import express from "express";
 import pinoHttp from "pino-http";
 
 // src/routes/index.ts
-import { Router as Router15 } from "express";
+import { Router as Router16 } from "express";
 
 // src/routes/health.ts
 import { Router } from "express";
@@ -24314,6 +24314,7 @@ __export(schema_exports, {
   hubs: () => hubs,
   inAppNotifications: () => inAppNotifications,
   lifecycleEvents: () => lifecycleEvents,
+  longTermLeases: () => longTermLeases,
   memberships: () => memberships,
   notificationDeliveries: () => notificationDeliveries,
   p2pListings: () => p2pListings,
@@ -24666,6 +24667,20 @@ var bountyAcquisitions = pgTable("bounty_acquisitions", {
   rewardStatus: text("reward_status").notNull().default("pending"),
   rewardPaidAt: timestamp("reward_paid_at", { withTimezone: true }),
   acquiredAt: timestamp("acquired_at", { withTimezone: true }).notNull().defaultNow()
+});
+
+// lib/db/src/schema/long_term_leases.ts
+var longTermLeases = pgTable("long_term_leases", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  bookId: uuid("book_id").notNull().references(() => books.id, { onDelete: "cascade" }),
+  hubId: uuid("hub_id").references(() => hubs.id, { onDelete: "set null" }),
+  depositAmount: integer("deposit_amount").notNull(),
+  /** pending | approved | rejected | active | completed */
+  status: text("status").notNull().default("pending"),
+  requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true })
 });
 
 // lib/db/src/db.ts
@@ -35044,6 +35059,21 @@ async function ensurePublicReadableIds() {
     await db.update(books).set({ refId }).where(eq(books.id, row.id));
   }
 }
+async function ensureLongTermLeasesTable() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS "long_term_leases" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "user_id" uuid NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "book_id" uuid NOT NULL REFERENCES "books"("id") ON DELETE CASCADE,
+      "hub_id" uuid REFERENCES "hubs"("id") ON DELETE SET NULL,
+      "deposit_amount" integer NOT NULL,
+      "status" text NOT NULL DEFAULT 'pending',
+      "requested_at" timestamp with time zone NOT NULL DEFAULT now(),
+      "approved_at" timestamp with time zone,
+      "completed_at" timestamp with time zone
+    );
+  `);
+}
 
 // src/lib/supabase-auth.ts
 var authClient = null;
@@ -35760,6 +35790,83 @@ async function attachInventoryStats(booksPayload) {
     }
   }));
 }
+async function mergeStudentLeases(booksPayload, auth) {
+  if (!auth?.userId) return booksPayload;
+  const studentLeases = await db.select({
+    id: longTermLeases.id,
+    bookId: longTermLeases.bookId,
+    hubId: longTermLeases.hubId,
+    depositAmount: longTermLeases.depositAmount,
+    status: longTermLeases.status,
+    requestedAt: longTermLeases.requestedAt,
+    approvedAt: longTermLeases.approvedAt,
+    completedAt: longTermLeases.completedAt,
+    bookTitle: books.title,
+    bookAuthor: books.author,
+    coverImageUrl: books.coverImageUrl
+  }).from(longTermLeases).innerJoin(books, eq(longTermLeases.bookId, books.id)).where(
+    and(
+      eq(longTermLeases.userId, auth.userId),
+      inArray(longTermLeases.status, ["approved", "active", "return_pending", "completed"])
+    )
+  );
+  const leaseMap = new Map(studentLeases.map((l) => [l.bookId, l]));
+  const updatedPayload = booksPayload.map((b) => {
+    const lease = leaseMap.get(b.id);
+    if (lease) {
+      leaseMap.delete(b.id);
+      let calculatedDueAt = b.dueAt;
+      if (!calculatedDueAt && lease.approvedAt) {
+        const d = new Date(lease.approvedAt);
+        d.setFullYear(d.getFullYear() + 1);
+        calculatedDueAt = d;
+      }
+      return {
+        ...b,
+        status: lease.status === "completed" && b.status !== "checked_out" ? b.status : "checked_out",
+        borrowerUserId: auth.userId,
+        dueAt: calculatedDueAt,
+        isLease: true,
+        leaseStatus: lease.status,
+        approvedAt: lease.approvedAt,
+        leaseDueAt: calculatedDueAt,
+        depositAmount: lease.depositAmount,
+        bookId: lease.bookId,
+        bookTitle: lease.bookTitle,
+        bookAuthor: lease.bookAuthor
+      };
+    }
+    return b;
+  });
+  for (const [_, lease] of leaseMap) {
+    let calculatedDueAt = null;
+    if (lease.approvedAt) {
+      const d = new Date(lease.approvedAt);
+      d.setFullYear(d.getFullYear() + 1);
+      calculatedDueAt = d;
+    }
+    updatedPayload.push({
+      id: lease.bookId,
+      title: lease.bookTitle,
+      author: lease.bookAuthor,
+      coverImageUrl: lease.coverImageUrl,
+      hubId: lease.hubId,
+      status: "checked_out",
+      borrowerUserId: auth.userId,
+      dueAt: calculatedDueAt,
+      isLease: true,
+      leaseStatus: lease.status,
+      borrowPrice: lease.depositAmount,
+      approvedAt: lease.approvedAt,
+      leaseDueAt: calculatedDueAt,
+      depositAmount: lease.depositAmount,
+      bookId: lease.bookId,
+      bookTitle: lease.bookTitle,
+      bookAuthor: lease.bookAuthor
+    });
+  }
+  return updatedPayload;
+}
 router3.get("/books", authMiddleware, async (req, res) => {
   await reconcileOverdueBooks();
   const rawQ = typeof req.query["q"] === "string" ? req.query["q"].trim() : "";
@@ -35769,18 +35876,21 @@ router3.get("/books", authMiddleware, async (req, res) => {
     const whereClause = availableOnly ? and(ilike(books.title, pattern), eq(books.status, "available"), notInterHubTransfer) : and(ilike(books.title, pattern), notInterHubTransfer);
     const rows2 = await fromActiveHubBooks().where(whereClause).orderBy(desc(books.createdAt), desc(books.id));
     const booksPayload2 = await enrichBooksAcquiredFromHubNames(rows2.map((r) => r.b));
-    res.json({ books: await attachInventoryStats(booksPayload2) });
+    const merged2 = await mergeStudentLeases(booksPayload2, req.auth);
+    res.json({ books: await attachInventoryStats(merged2) });
     return;
   }
   if (availableOnly) {
     const rows2 = await fromActiveHubBooks().where(and(eq(books.status, "available"), notInterHubTransfer)).orderBy(desc(books.createdAt), desc(books.id));
     const booksPayload2 = await enrichBooksAcquiredFromHubNames(rows2.map((r) => r.b));
-    res.json({ books: await attachInventoryStats(booksPayload2) });
+    const merged2 = await mergeStudentLeases(booksPayload2, req.auth);
+    res.json({ books: await attachInventoryStats(merged2) });
     return;
   }
   const rows = await fromActiveHubBooks().where(notInterHubTransfer).orderBy(desc(books.createdAt), desc(books.id));
   const booksPayload = await enrichBooksAcquiredFromHubNames(rows.map((r) => r.b));
-  res.json({ books: await attachInventoryStats(booksPayload) });
+  const merged = await mergeStudentLeases(booksPayload, req.auth);
+  res.json({ books: await attachInventoryStats(merged) });
 });
 router3.get("/hubs", authMiddleware, async (_req, res) => {
   const rows = await db.select().from(hubs).where(eq(hubs.isActive, true));
@@ -36737,6 +36847,16 @@ router4.post("/:bookId/return", authMiddleware, requireAuth, async (req, res) =>
       returnedHubId: book.returnedHubId ?? book.hubId,
       updatedAt: now
     }).where(and(eq(books.id, bookId), eq(books.status, "checked_out")));
+    await tx.update(longTermLeases).set({
+      status: "completed",
+      completedAt: now
+    }).where(
+      and(
+        eq(longTermLeases.bookId, bookId),
+        eq(longTermLeases.userId, auth.userId),
+        inArray(longTermLeases.status, ["active", "return_pending"])
+      )
+    );
     await logAudit({
       userId: auth.userId,
       actorId: auth.userId,
@@ -37358,7 +37478,42 @@ router5.post("/:id/cancel", authMiddleware, requireAuth, async (req, res) => {
   }
   const [row] = await db.select().from(bookRequests).where(eq(bookRequests.id, id)).limit(1);
   if (!row) {
-    res.status(404).json({ error: "Not found" });
+    const [lease] = await db.select().from(longTermLeases).where(eq(longTermLeases.id, id)).limit(1);
+    if (!lease) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (lease.userId !== auth.userId) {
+      res.status(403).json({ error: "You can only cancel your own lease requests." });
+      return;
+    }
+    if (lease.status !== "pending") {
+      res.status(409).json({ error: "You can't withdraw this lease request anymore." });
+      return;
+    }
+    await db.transaction(async (tx) => {
+      await tx.update(longTermLeases).set({
+        status: "rejected"
+      }).where(eq(longTermLeases.id, id));
+      await tx.update(books).set({
+        status: "available",
+        updatedAt: /* @__PURE__ */ new Date()
+      }).where(eq(books.id, lease.bookId));
+    });
+    await notifyUser({
+      userId: lease.userId,
+      kind: "book_request_cancelled",
+      body: `You withdrew your long-term lease request.`
+    });
+    await logAudit({
+      userId: auth.userId,
+      actorId: auth.userId,
+      hubId: lease.hubId,
+      action: "LEASE_WITHDRAWN",
+      resourceType: "long_term_lease",
+      resourceId: id
+    });
+    res.json({ request: { id, status: "cancelled" } });
     return;
   }
   if (row.userId !== auth.userId) {
@@ -37471,22 +37626,78 @@ router5.get("/hub", authMiddleware, requireAuth, async (req, res) => {
       inArray(bookRequests.hubId, hubScope)
     )
   ).orderBy(desc(bookRequests.updatedAt));
+  const leaseRows = await db.select({
+    id: longTermLeases.id,
+    userId: longTermLeases.userId,
+    hubId: longTermLeases.hubId,
+    depositAmount: longTermLeases.depositAmount,
+    status: longTermLeases.status,
+    requestedAt: longTermLeases.requestedAt,
+    approvedAt: longTermLeases.approvedAt,
+    completedAt: longTermLeases.completedAt,
+    bookId: longTermLeases.bookId,
+    bookTitle: books.title,
+    author: books.author,
+    isbn: books.isbn,
+    refId: books.refId
+  }).from(longTermLeases).innerJoin(books, eq(longTermLeases.bookId, books.id)).where(inArray(longTermLeases.hubId, hubScope));
   const withMeta = await withReassignMeta(rows);
-  const userIds = [...new Set(withMeta.map((r) => r.userId))];
+  const userIds = [
+    .../* @__PURE__ */ new Set([...withMeta.map((r) => r.userId), ...leaseRows.map((l) => l.userId)])
+  ];
   const copyIds = [
-    ...new Set(withMeta.map((r) => r.assignedCopyId).filter((v) => !!v))
+    .../* @__PURE__ */ new Set([
+      ...withMeta.map((r) => r.assignedCopyId).filter((v) => !!v),
+      ...leaseRows.map((l) => l.bookId).filter((v) => !!v)
+    ])
   ];
   const userRows = userIds.length > 0 ? await db.select({ id: users.id, publicId: users.publicId }).from(users).where(inArray(users.id, userIds)) : [];
   const copyRows = copyIds.length > 0 ? await db.select({ id: books.id, refId: books.refId }).from(books).where(inArray(books.id, copyIds)) : [];
   const userPublicIdById = new Map(userRows.map((u) => [u.id, u.publicId ?? null]));
   const copyRefById = new Map(copyRows.map((c) => [c.id, c.refId ?? null]));
+  const serializedRequests = withMeta.map(
+    (r) => serializeRequest(r, {
+      requesterPublicId: userPublicIdById.get(r.userId) ?? null,
+      assignedCopyRefId: r.assignedCopyId ? copyRefById.get(r.assignedCopyId) ?? null : null
+    })
+  );
+  const mappedLeases = leaseRows.map((lease) => {
+    let mappedStatus = lease.status;
+    if (lease.status === "pending") mappedStatus = "lease_requested";
+    else if (lease.status === "approved") mappedStatus = "lease_approved";
+    else if (lease.status === "active") mappedStatus = "lease_active";
+    else if (lease.status === "return_pending") mappedStatus = "lease_return_pending";
+    else if (lease.status === "completed") mappedStatus = "lease_completed";
+    else if (lease.status === "refunded") mappedStatus = "lease_refunded";
+    return {
+      id: lease.id,
+      userId: lease.userId,
+      requesterPublicId: userPublicIdById.get(lease.userId) ?? null,
+      hubId: lease.hubId,
+      assignedHubId: lease.hubId,
+      fulfilledByHubId: lease.hubId,
+      bookTitle: lease.bookTitle,
+      author: lease.author,
+      isbn: lease.isbn,
+      notes: `Long-term Lease Request (Deposit: ${lease.depositAmount} credits)`,
+      status: mappedStatus,
+      assignedCopyId: lease.bookId,
+      assignedCopyRefId: lease.refId,
+      assignmentVerified: true,
+      assignedAt: lease.approvedAt,
+      assignedBy: null,
+      readyAt: lease.approvedAt,
+      fulfilledAt: lease.approvedAt,
+      deliveredAt: lease.completedAt,
+      expiresAt: null,
+      createdAt: lease.requestedAt,
+      updatedAt: lease.completedAt || lease.approvedAt || lease.requestedAt,
+      isLongTermLease: true,
+      fromLeaseTable: true
+    };
+  });
   res.json({
-    requests: withMeta.map(
-      (r) => serializeRequest(r, {
-        requesterPublicId: userPublicIdById.get(r.userId) ?? null,
-        assignedCopyRefId: r.assignedCopyId ? copyRefById.get(r.assignedCopyId) ?? null : null
-      })
-    )
+    requests: [...serializedRequests, ...mappedLeases]
   });
 });
 router5.get("/:id", authMiddleware, requireAuth, async (req, res) => {
@@ -37621,7 +37832,48 @@ router5.post("/:id/confirm-delivery", authMiddleware, requireAuth, async (req, r
   }
   const [row] = await db.select().from(bookRequests).where(eq(bookRequests.id, id)).limit(1);
   if (!row) {
-    res.status(404).json({ error: "Not found" });
+    const [lease] = await db.select().from(longTermLeases).where(eq(longTermLeases.id, id)).limit(1);
+    if (!lease) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (lease.userId !== auth.userId) {
+      res.status(403).json({ error: "Only the leasing student can confirm collection." });
+      return;
+    }
+    if (lease.status !== "approved") {
+      res.status(409).json({ error: "This lease is not ready for collection confirmation." });
+      return;
+    }
+    const now2 = /* @__PURE__ */ new Date();
+    const twelveMonthsFromNow = /* @__PURE__ */ new Date();
+    twelveMonthsFromNow.setFullYear(twelveMonthsFromNow.getFullYear() + 1);
+    await db.transaction(async (tx) => {
+      await tx.update(longTermLeases).set({
+        status: "active"
+      }).where(eq(longTermLeases.id, id));
+      await tx.update(books).set({
+        status: "checked_out",
+        borrowerUserId: lease.userId,
+        dueAt: twelveMonthsFromNow,
+        updatedAt: now2
+      }).where(eq(books.id, lease.bookId));
+    });
+    await notifyUser({
+      userId: lease.userId,
+      kind: "book_request_delivered",
+      body: "Your long-term lease has successfully started.\nThank you."
+    });
+    await logAudit({
+      userId: auth.userId,
+      actorId: auth.userId,
+      hubId: lease.hubId,
+      action: "LEASE_DELIVERED",
+      resourceType: "long_term_lease",
+      resourceId: id,
+      meta: { bookId: lease.bookId }
+    });
+    res.json({ request: { id, status: "lease_active" } });
     return;
   }
   if (row.userId !== auth.userId) {
@@ -39048,7 +39300,14 @@ async function buildHubOverviewPayload(hubIds, hubIdFilter, range) {
   const bountyOpenRows = await db.select({ n: count() }).from(bountyRequests).where(
     and(
       inArray(bountyRequests.hubId, effective),
-      inArray(bountyRequests.status, ["open", "pending_student_delivery", "under_review"])
+      inArray(bountyRequests.status, [
+        "open",
+        "pending_student_delivery",
+        "under_review",
+        "approved",
+        "completed",
+        "closed"
+      ])
     )
   );
   const bountyOpenRequests = Number(bountyOpenRows[0]?.n ?? 0);
@@ -39070,17 +39329,7 @@ async function buildHubOverviewPayload(hubIds, hubIdFilter, range) {
   const bountyFulfilledRequests = Number(bountyFulfilledRows[0]?.n ?? 0);
   const bountyRewardRows = await db.select({
     total: sql`coalesce(sum(${bountyRequests.rewardAmount} * ${bountyRequests.quantity}), 0)`
-  }).from(bountyRequests).where(
-    and(
-      inArray(bountyRequests.hubId, effective),
-      inArray(bountyRequests.status, [
-        "open",
-        "pending_student_delivery",
-        "under_review",
-        "approved"
-      ])
-    )
-  );
+  }).from(bountyRequests).where(inArray(bountyRequests.hubId, effective));
   const bountyTotalRewardValue = Number(bountyRewardRows[0]?.total ?? 0);
   if (bountyPendingDeliveries > 0) {
     alerts.push({
@@ -40489,12 +40738,109 @@ router8.get("/students/analytics", authMiddleware, requireAuth, async (req, res)
       walletActivityTrends: {
         issued: totalCreditsIssued,
         redeemed: totalCreditsRedeemed,
-        net: totalCreditsIssued - totalCreditsRedeemed
+        totalStudents,
+        activeSubscriptions,
+        expiredSubscriptions,
+        totalCreditsIssued,
+        totalCreditsRedeemed,
+        walletActivityTrends: {
+          issued: totalCreditsIssued,
+          redeemed: totalCreditsRedeemed,
+          net: totalCreditsIssued - totalCreditsRedeemed
+        }
       }
     });
   } catch (error) {
     logger.error({ error, hubId }, "Error fetching hub student analytics");
     res.status(500).json({ error: "Failed to fetch student analytics" });
+  }
+});
+router8.get("/long-term-leases", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  if (auth.hubStaffHubIds.length === 0) {
+    res.json({ leases: [] });
+    return;
+  }
+  const hubIdParam = typeof req.query["hubId"] === "string" ? req.query["hubId"] : void 0;
+  const effective = hubIdParam && auth.hubStaffHubIds.includes(hubIdParam) ? [hubIdParam] : auth.hubStaffHubIds;
+  try {
+    const rows = await db.select({
+      id: longTermLeases.id,
+      userId: longTermLeases.userId,
+      bookId: longTermLeases.bookId,
+      hubId: longTermLeases.hubId,
+      depositAmount: longTermLeases.depositAmount,
+      status: longTermLeases.status,
+      requestedAt: longTermLeases.requestedAt,
+      approvedAt: longTermLeases.approvedAt,
+      completedAt: longTermLeases.completedAt,
+      studentName: users.name,
+      studentEmail: users.email,
+      bookTitle: books.title,
+      bookAuthor: books.author,
+      coverImageUrl: books.coverImageUrl
+    }).from(longTermLeases).innerJoin(books, eq(longTermLeases.bookId, books.id)).innerJoin(users, eq(longTermLeases.userId, users.id)).where(inArray(longTermLeases.hubId, effective)).orderBy(desc(longTermLeases.requestedAt));
+    res.json({ leases: rows });
+  } catch (error) {
+    logger.error(error, "Failed to retrieve pending lease requests");
+    res.status(500).json({ error: "Failed to retrieve lease requests." });
+  }
+});
+router8.patch("/long-term-leases/:id", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  const id = pathParam(req.params["id"]);
+  if (!id) {
+    res.status(400).json({ error: "Invalid lease request ID." });
+    return;
+  }
+  const parsed = external_exports.object({ status: external_exports.enum(["approved", "rejected"]) }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid status. Must be 'approved' or 'rejected'." });
+    return;
+  }
+  const { status } = parsed.data;
+  try {
+    const [lease] = await db.select().from(longTermLeases).where(eq(longTermLeases.id, id)).limit(1);
+    if (!lease) {
+      res.status(404).json({ error: "Lease request not found." });
+      return;
+    }
+    if (!lease.hubId || !auth.hubStaffHubIds.includes(lease.hubId)) {
+      res.status(403).json({ error: "You do not manage the hub for this lease request." });
+      return;
+    }
+    const [book] = await db.select({ title: books.title }).from(books).where(eq(books.id, lease.bookId)).limit(1);
+    const bookTitle = book?.title ?? "your requested book";
+    const [updated] = await db.transaction(async (tx) => {
+      const [upd] = await tx.update(longTermLeases).set({
+        status,
+        ...status === "approved" ? { approvedAt: /* @__PURE__ */ new Date() } : {}
+      }).where(eq(longTermLeases.id, id)).returning();
+      if (status === "rejected") {
+        await tx.update(books).set({
+          status: "available",
+          updatedAt: /* @__PURE__ */ new Date()
+        }).where(eq(books.id, lease.bookId));
+      }
+      return [upd];
+    });
+    if (status === "approved") {
+      await notifyUser({
+        userId: lease.userId,
+        kind: "lease_request_approved",
+        body: `Your long-term lease request for "${bookTitle}" has been accepted.`
+      });
+    } else {
+      await notifyUser({
+        userId: lease.userId,
+        kind: "lease_request_rejected",
+        body: `Your long-term lease request for "${bookTitle}" was declined.`
+      });
+    }
+    res.json({ lease: updated });
+  } catch (error) {
+    logger.error(error, "Failed to update lease request status");
+    res.status(500).json({ error: "Failed to update lease request." });
   }
 });
 var hub_default = router8;
@@ -42665,6 +43011,47 @@ router12.post("/verify", async (req, res) => {
     res.status(400).json({ error: err.message || "Failed to process payment" });
   }
 });
+var subscribeSchema = external_exports.object({
+  tier: external_exports.enum(["free", "pro"])
+});
+router12.post("/subscribe", async (req, res) => {
+  const parsed = subscribeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Invalid payload" });
+  }
+  const { tier } = parsed.data;
+  const [plan] = await db.select().from(subscriptionPlans).where(
+    and(
+      eq(subscriptionPlans.tier, tier),
+      eq(subscriptionPlans.target, "student"),
+      eq(subscriptionPlans.isActive, 1)
+    )
+  ).limit(1);
+  if (!plan) {
+    return res.status(404).json({ error: "Plan not found" });
+  }
+  const [existing] = await db.select().from(userSubscriptions).where(eq(userSubscriptions.userId, req.auth.userId)).limit(1);
+  if (existing) {
+    await db.update(userSubscriptions).set({
+      planId: plan.id,
+      status: "pending",
+      updatedAt: /* @__PURE__ */ new Date()
+    }).where(eq(userSubscriptions.id, existing.id));
+  } else {
+    const now = /* @__PURE__ */ new Date();
+    await db.insert(userSubscriptions).values({
+      userId: req.auth.userId,
+      planId: plan.id,
+      status: "pending",
+      currentPeriodStart: now,
+      currentPeriodEnd: now
+    });
+  }
+  res.json({
+    success: true,
+    message: "Subscription request submitted for admin approval."
+  });
+});
 var subscriptions_default = router12;
 
 // src/routes/student.ts
@@ -42753,11 +43140,18 @@ router13.get("/dashboard", requireAuth, async (req, res) => {
             ) + (
               SELECT count(*)::int FROM p2p_listings pl WHERE pl.buyer_id = $1
             ) AS "totalBought",
-            (
-              SELECT count(*)::int
-              FROM p2p_listings pl
-              WHERE pl.owner_id = $1 AND pl.status IN ('sold', 'completed')
-            ) AS "totalSold",
+            COALESCE((
+  SELECT count(*)::int
+  FROM p2p_listings pl
+  WHERE pl.owner_id = $1
+    AND pl.status IN ('sold', 'completed')
+), 0)
++
+COALESCE((
+  SELECT count(*)::int
+  FROM bounty_acquisitions ba
+  WHERE ba.student_id = $1
+), 0) AS "totalSold",
             COALESCE((
               SELECT sum(pl.price)::int
               FROM p2p_listings pl
@@ -43494,6 +43888,82 @@ router14.post(
 );
 var bounty_default = router14;
 
+// src/routes/long-term-leases.ts
+import { Router as Router15 } from "express";
+var router15 = Router15();
+var createLeaseSchema = external_exports.object({
+  bookId: external_exports.string().uuid()
+});
+router15.post("/", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  const parsed = createLeaseSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid request body. Missing or invalid bookId." });
+    return;
+  }
+  const { bookId } = parsed.data;
+  try {
+    const lease = await db.transaction(async (tx) => {
+      const [book] = await tx.select().from(books).where(eq(books.id, bookId)).limit(1);
+      if (!book) {
+        const err = new Error("NOT_FOUND");
+        err.status = 404;
+        throw err;
+      }
+      if (book.status !== "available") {
+        const err = new Error("NOT_AVAILABLE");
+        err.status = 409;
+        throw err;
+      }
+      await tx.update(books).set({ status: "reserved", updatedAt: /* @__PURE__ */ new Date() }).where(eq(books.id, bookId));
+      const [newLease] = await tx.insert(longTermLeases).values({
+        userId: auth.userId,
+        bookId: book.id,
+        hubId: book.hubId,
+        depositAmount: book.buyPrice,
+        status: "pending"
+      }).returning();
+      return newLease;
+    });
+    res.status(201).json({ lease });
+  } catch (error) {
+    if (error.message === "NOT_FOUND") {
+      res.status(404).json({ error: "Book copy not found." });
+      return;
+    }
+    if (error.message === "NOT_AVAILABLE") {
+      res.status(409).json({ error: "Only available book copies can be requested for lease." });
+      return;
+    }
+    res.status(500).json({ error: "Failed to submit lease request. Please try again." });
+  }
+});
+router15.get("/my", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth;
+  try {
+    const rows = await db.select({
+      id: longTermLeases.id,
+      userId: longTermLeases.userId,
+      bookId: longTermLeases.bookId,
+      hubId: longTermLeases.hubId,
+      depositAmount: longTermLeases.depositAmount,
+      status: longTermLeases.status,
+      requestedAt: longTermLeases.requestedAt,
+      approvedAt: longTermLeases.approvedAt,
+      completedAt: longTermLeases.completedAt,
+      bookTitle: books.title,
+      bookAuthor: books.author,
+      coverImageUrl: books.coverImageUrl
+    }).from(longTermLeases).innerJoin(books, eq(longTermLeases.bookId, books.id)).where(eq(longTermLeases.userId, auth.userId)).orderBy(desc(longTermLeases.requestedAt));
+    res.json({ leases: rows });
+  } catch {
+    res.status(500).json({
+      error: "Failed to retrieve your lease requests."
+    });
+  }
+});
+var long_term_leases_default = router15;
+
 // src/lib/book-cover-storage.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import fs3 from "node:fs/promises";
@@ -43560,31 +44030,32 @@ async function saveBookCoverImage(opts) {
 }
 
 // src/routes/index.ts
-var router15 = Router15();
-router15.get("/placeholder-book-cover-url", (req, res) => {
+var router16 = Router16();
+router16.get("/placeholder-book-cover-url", (req, res) => {
   res.json({ url: getPlaceholderBookCoverPublicUrl() });
 });
-router15.use(health_default);
-router15.use("/auth", auth_default);
-router15.use("/catalog", catalog_default);
-router15.use("/p2p", p2p_default);
-router15.use(requireAuth);
-router15.use("/books", books_default);
-router15.use("/book-requests", book_requests_default);
-router15.use("/notifications", notifications_default);
-router15.use("/hub", hub_default);
-router15.use("/activity", activity_default);
-router15.use("/admin", admin_default);
-router15.use("/wallet", wallet_default);
-router15.use("/subscriptions", subscriptions_default);
-router15.use("/student", student_default);
-router15.use("/bounty", bounty_default);
-var routes_default = router15;
+router16.use(health_default);
+router16.use("/auth", auth_default);
+router16.use("/catalog", catalog_default);
+router16.use("/p2p", p2p_default);
+router16.use(requireAuth);
+router16.use("/books", books_default);
+router16.use("/book-requests", book_requests_default);
+router16.use("/notifications", notifications_default);
+router16.use("/hub", hub_default);
+router16.use("/activity", activity_default);
+router16.use("/admin", admin_default);
+router16.use("/wallet", wallet_default);
+router16.use("/subscriptions", subscriptions_default);
+router16.use("/student", student_default);
+router16.use("/bounty", bounty_default);
+router16.use("/long-term-leases", long_term_leases_default);
+var routes_default = router16;
 
 // src/routes/uploads.ts
-import { Router as Router16 } from "express";
+import { Router as Router17 } from "express";
 import multer from "multer";
-var router16 = Router16();
+var router17 = Router17();
 var allowed = /* @__PURE__ */ new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 var upload = multer({
   storage: multer.memoryStorage(),
@@ -43597,7 +44068,7 @@ var upload = multer({
     cb(new Error("Only JPEG, PNG, WebP, or GIF images are allowed."));
   }
 });
-router16.post("/book-cover", requireAuth, (req, res) => {
+router17.post("/book-cover", requireAuth, (req, res) => {
   upload.single("image")(req, res, (err) => {
     void (async () => {
       if (err) {
@@ -43623,7 +44094,7 @@ router16.post("/book-cover", requireAuth, (req, res) => {
     })();
   });
 });
-router16.post("/profile-image", requireAuth, (req, res) => {
+router17.post("/profile-image", requireAuth, (req, res) => {
   upload.single("image")(req, res, (err) => {
     void (async () => {
       if (err) {
@@ -43655,7 +44126,7 @@ router16.post("/profile-image", requireAuth, (req, res) => {
     })();
   });
 });
-var uploads_default = router16;
+var uploads_default = router17;
 
 // src/middleware/api-rate-limit.ts
 var buckets = /* @__PURE__ */ new Map();
@@ -44647,6 +45118,11 @@ async function bootstrapLocalServer() {
       await ensurePublicReadableIds();
     } catch (e) {
       logger.error({ err: e }, "ensurePublicReadableIds failed");
+    }
+    try {
+      await ensureLongTermLeasesTable();
+    } catch (e) {
+      logger.error({ err: e }, "ensureLongTermLeasesTable failed");
     }
     try {
       await seedIfEmpty();

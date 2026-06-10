@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import {
   and,
   count,
+  desc,
   eq,
   getTableColumns,
   inArray,
@@ -24,6 +25,7 @@ import {
   userSubscriptions,
   subscriptionPlans,
   lifecycleEvents,
+  longTermLeases,
 } from "@workspace/db/schema";
 import { ACTIONS } from "../lib/rbac/actions";
 import { authorize } from "../lib/rbac/authorize";
@@ -1369,12 +1371,150 @@ router.get("/students/analytics", authMiddleware, requireAuth, async (req, res) 
       walletActivityTrends: {
         issued: totalCreditsIssued,
         redeemed: totalCreditsRedeemed,
-        net: totalCreditsIssued - totalCreditsRedeemed,
+        totalStudents,
+        activeSubscriptions,
+        expiredSubscriptions,
+        totalCreditsIssued,
+        totalCreditsRedeemed,
+        walletActivityTrends: {
+          issued: totalCreditsIssued,
+          redeemed: totalCreditsRedeemed,
+          net: totalCreditsIssued - totalCreditsRedeemed,
+        },
       },
     });
   } catch (error) {
     logger.error({ error, hubId }, "Error fetching hub student analytics");
     res.status(500).json({ error: "Failed to fetch student analytics" });
+  }
+});
+
+// GET /api/hub/long-term-leases - Get pending lease requests for Hubs managed by the authenticated user
+router.get("/long-term-leases", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth!;
+  if (auth.hubStaffHubIds.length === 0) {
+    res.json({ leases: [] });
+    return;
+  }
+
+  const hubIdParam = typeof req.query["hubId"] === "string" ? req.query["hubId"] : undefined;
+  const effective =
+    hubIdParam && auth.hubStaffHubIds.includes(hubIdParam) ? [hubIdParam] : auth.hubStaffHubIds;
+
+  try {
+    const rows = await db
+      .select({
+        id: longTermLeases.id,
+        userId: longTermLeases.userId,
+        bookId: longTermLeases.bookId,
+        hubId: longTermLeases.hubId,
+        depositAmount: longTermLeases.depositAmount,
+        status: longTermLeases.status,
+        requestedAt: longTermLeases.requestedAt,
+        approvedAt: longTermLeases.approvedAt,
+        completedAt: longTermLeases.completedAt,
+        studentName: users.name,
+        studentEmail: users.email,
+        bookTitle: books.title,
+        bookAuthor: books.author,
+        coverImageUrl: books.coverImageUrl,
+      })
+      .from(longTermLeases)
+      .innerJoin(books, eq(longTermLeases.bookId, books.id))
+      .innerJoin(users, eq(longTermLeases.userId, users.id))
+      .where(inArray(longTermLeases.hubId, effective))
+      .orderBy(desc(longTermLeases.requestedAt));
+
+    res.json({ leases: rows });
+  } catch (error) {
+    logger.error(error, "Failed to retrieve pending lease requests");
+    res.status(500).json({ error: "Failed to retrieve lease requests." });
+  }
+});
+
+// PATCH /api/hub/long-term-leases/:id - Approve or reject a request
+router.patch("/long-term-leases/:id", authMiddleware, requireAuth, async (req, res) => {
+  const auth = req.auth!;
+  const id = pathParam(req.params["id"]);
+  if (!id) {
+    res.status(400).json({ error: "Invalid lease request ID." });
+    return;
+  }
+
+  const parsed = z.object({ status: z.enum(["approved", "rejected"]) }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid status. Must be 'approved' or 'rejected'." });
+    return;
+  }
+
+  const { status } = parsed.data;
+
+  try {
+    const [lease] = await db
+      .select()
+      .from(longTermLeases)
+      .where(eq(longTermLeases.id, id))
+      .limit(1);
+
+    if (!lease) {
+      res.status(404).json({ error: "Lease request not found." });
+      return;
+    }
+
+    if (!lease.hubId || !auth.hubStaffHubIds.includes(lease.hubId)) {
+      res.status(403).json({ error: "You do not manage the hub for this lease request." });
+      return;
+    }
+
+    const [book] = await db
+      .select({ title: books.title })
+      .from(books)
+      .where(eq(books.id, lease.bookId))
+      .limit(1);
+
+    const bookTitle = book?.title ?? "your requested book";
+
+    const [updated] = await db.transaction(async (tx) => {
+      const [upd] = await tx
+        .update(longTermLeases)
+        .set({
+          status,
+          ...(status === "approved" ? { approvedAt: new Date() } : {}),
+        })
+        .where(eq(longTermLeases.id, id))
+        .returning();
+
+      if (status === "rejected") {
+        await tx
+          .update(books)
+          .set({
+            status: "available",
+            updatedAt: new Date(),
+          })
+          .where(eq(books.id, lease.bookId));
+      }
+
+      return [upd];
+    });
+
+    if (status === "approved") {
+      await notifyUser({
+        userId: lease.userId,
+        kind: "lease_request_approved",
+        body: `Your long-term lease request for "${bookTitle}" has been accepted.`,
+      });
+    } else {
+      await notifyUser({
+        userId: lease.userId,
+        kind: "lease_request_rejected",
+        body: `Your long-term lease request for "${bookTitle}" was declined.`,
+      });
+    }
+
+    res.json({ lease: updated });
+  } catch (error) {
+    logger.error(error, "Failed to update lease request status");
+    res.status(500).json({ error: "Failed to update lease request." });
   }
 });
 

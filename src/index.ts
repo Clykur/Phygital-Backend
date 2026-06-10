@@ -5,7 +5,7 @@ import { processNotificationQueueWorker } from "./lib/notification-queue";
 import { expireStaleAssignmentsWorker } from "./lib/expire-stale-assignments";
 import { runHubReconciliation } from "./lib/hub-reconciliation";
 import { logger } from "./lib/logger";
-import { ensurePublicReadableIds } from "./lib/public-ids";
+import { ensurePublicReadableIds, ensureLongTermLeasesTable } from "./lib/public-ids";
 import { seedIfEmpty } from "./seed";
 
 pool.on("error", (err) => {
@@ -37,6 +37,11 @@ async function bootstrapLocalServer(): Promise<void> {
       await ensurePublicReadableIds();
     } catch (e) {
       logger.error({ err: e }, "ensurePublicReadableIds failed");
+    }
+    try {
+      await ensureLongTermLeasesTable();
+    } catch (e) {
+      logger.error({ err: e }, "ensureLongTermLeasesTable failed");
     }
     try {
       await seedIfEmpty();
@@ -71,3 +76,4 @@ if (!process.env.VERCEL) {
 }
 
 export default app;
+// Trigger watch rebuild

@@ -2,7 +2,13 @@ import { Router, type IRouter } from "express";
 import { and, count, desc, eq, inArray, isNull, or, sql, type InferSelectModel } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@workspace/db";
-import { bookRequestHubReassignments, bookRequests, books, users } from "@workspace/db/schema";
+import {
+  bookRequestHubReassignments,
+  bookRequests,
+  books,
+  users,
+  longTermLeases,
+} from "@workspace/db/schema";
 import { checkoutDueAt } from "../lib/books-lifecycle";
 import { ACTIONS } from "../lib/rbac/actions";
 import { authorize, canManageBookRequest } from "../lib/rbac/authorize";
@@ -251,7 +257,57 @@ router.post("/:id/cancel", authMiddleware, requireAuth, async (req, res) => {
   }
   const [row] = await db.select().from(bookRequests).where(eq(bookRequests.id, id)).limit(1);
   if (!row) {
-    res.status(404).json({ error: "Not found" });
+    const [lease] = await db
+      .select()
+      .from(longTermLeases)
+      .where(eq(longTermLeases.id, id))
+      .limit(1);
+    if (!lease) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (lease.userId !== auth.userId) {
+      res.status(403).json({ error: "You can only cancel your own lease requests." });
+      return;
+    }
+    if (lease.status !== "pending") {
+      res.status(409).json({ error: "You can't withdraw this lease request anymore." });
+      return;
+    }
+
+    await db.transaction(async (tx) => {
+      await tx
+        .update(longTermLeases)
+        .set({
+          status: "rejected",
+        })
+        .where(eq(longTermLeases.id, id));
+
+      await tx
+        .update(books)
+        .set({
+          status: "available",
+          updatedAt: new Date(),
+        })
+        .where(eq(books.id, lease.bookId));
+    });
+
+    await notifyUser({
+      userId: lease.userId,
+      kind: "book_request_cancelled",
+      body: `You withdrew your long-term lease request.`,
+    });
+
+    await logAudit({
+      userId: auth.userId,
+      actorId: auth.userId,
+      hubId: lease.hubId,
+      action: "LEASE_WITHDRAWN",
+      resourceType: "long_term_lease",
+      resourceId: id,
+    });
+
+    res.json({ request: { id, status: "cancelled" } });
     return;
   }
   if (row.userId !== auth.userId) {
@@ -395,10 +451,35 @@ router.get("/hub", authMiddleware, requireAuth, async (req, res) => {
     )
     .orderBy(desc(bookRequests.updatedAt));
 
+  const leaseRows = await db
+    .select({
+      id: longTermLeases.id,
+      userId: longTermLeases.userId,
+      hubId: longTermLeases.hubId,
+      depositAmount: longTermLeases.depositAmount,
+      status: longTermLeases.status,
+      requestedAt: longTermLeases.requestedAt,
+      approvedAt: longTermLeases.approvedAt,
+      completedAt: longTermLeases.completedAt,
+      bookId: longTermLeases.bookId,
+      bookTitle: books.title,
+      author: books.author,
+      isbn: books.isbn,
+      refId: books.refId,
+    })
+    .from(longTermLeases)
+    .innerJoin(books, eq(longTermLeases.bookId, books.id))
+    .where(inArray(longTermLeases.hubId, hubScope));
+
   const withMeta = await withReassignMeta(rows);
-  const userIds = [...new Set(withMeta.map((r) => r.userId))];
+  const userIds = [
+    ...new Set([...withMeta.map((r) => r.userId), ...leaseRows.map((l) => l.userId)]),
+  ];
   const copyIds = [
-    ...new Set(withMeta.map((r) => r.assignedCopyId).filter((v): v is string => !!v)),
+    ...new Set([
+      ...withMeta.map((r) => r.assignedCopyId).filter((v): v is string => !!v),
+      ...leaseRows.map((l) => l.bookId).filter((v): v is string => !!v),
+    ]),
   ];
   const userRows =
     userIds.length > 0
@@ -417,13 +498,52 @@ router.get("/hub", authMiddleware, requireAuth, async (req, res) => {
   const userPublicIdById = new Map(userRows.map((u) => [u.id, u.publicId ?? null]));
   const copyRefById = new Map(copyRows.map((c) => [c.id, c.refId ?? null]));
 
+  const serializedRequests = withMeta.map((r) =>
+    serializeRequest(r, {
+      requesterPublicId: userPublicIdById.get(r.userId) ?? null,
+      assignedCopyRefId: r.assignedCopyId ? (copyRefById.get(r.assignedCopyId) ?? null) : null,
+    }),
+  );
+
+  const mappedLeases = leaseRows.map((lease) => {
+    let mappedStatus = lease.status;
+    if (lease.status === "pending") mappedStatus = "lease_requested";
+    else if (lease.status === "approved") mappedStatus = "lease_approved";
+    else if (lease.status === "active") mappedStatus = "lease_active";
+    else if (lease.status === "return_pending") mappedStatus = "lease_return_pending";
+    else if (lease.status === "completed") mappedStatus = "lease_completed";
+    else if (lease.status === "refunded") mappedStatus = "lease_refunded";
+
+    return {
+      id: lease.id,
+      userId: lease.userId,
+      requesterPublicId: userPublicIdById.get(lease.userId) ?? null,
+      hubId: lease.hubId,
+      assignedHubId: lease.hubId,
+      fulfilledByHubId: lease.hubId,
+      bookTitle: lease.bookTitle,
+      author: lease.author,
+      isbn: lease.isbn,
+      notes: `Long-term Lease Request (Deposit: ${lease.depositAmount} credits)`,
+      status: mappedStatus,
+      assignedCopyId: lease.bookId,
+      assignedCopyRefId: lease.refId,
+      assignmentVerified: true,
+      assignedAt: lease.approvedAt,
+      assignedBy: null,
+      readyAt: lease.approvedAt,
+      fulfilledAt: lease.approvedAt,
+      deliveredAt: lease.completedAt,
+      expiresAt: null,
+      createdAt: lease.requestedAt,
+      updatedAt: lease.completedAt || lease.approvedAt || lease.requestedAt,
+      isLongTermLease: true,
+      fromLeaseTable: true,
+    };
+  });
+
   res.json({
-    requests: withMeta.map((r) =>
-      serializeRequest(r, {
-        requesterPublicId: userPublicIdById.get(r.userId) ?? null,
-        assignedCopyRefId: r.assignedCopyId ? (copyRefById.get(r.assignedCopyId) ?? null) : null,
-      }),
-    ),
+    requests: [...serializedRequests, ...mappedLeases],
   });
 });
 
@@ -583,9 +703,67 @@ router.post("/:id/confirm-delivery", authMiddleware, requireAuth, async (req, re
 
   const [row] = await db.select().from(bookRequests).where(eq(bookRequests.id, id)).limit(1);
   if (!row) {
-    res.status(404).json({ error: "Not found" });
+    const [lease] = await db
+      .select()
+      .from(longTermLeases)
+      .where(eq(longTermLeases.id, id))
+      .limit(1);
+    if (!lease) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (lease.userId !== auth.userId) {
+      res.status(403).json({ error: "Only the leasing student can confirm collection." });
+      return;
+    }
+    if (lease.status !== "approved") {
+      res.status(409).json({ error: "This lease is not ready for collection confirmation." });
+      return;
+    }
+
+    const now = new Date();
+    const twelveMonthsFromNow = new Date();
+    twelveMonthsFromNow.setFullYear(twelveMonthsFromNow.getFullYear() + 1);
+
+    await db.transaction(async (tx) => {
+      await tx
+        .update(longTermLeases)
+        .set({
+          status: "active",
+        })
+        .where(eq(longTermLeases.id, id));
+
+      await tx
+        .update(books)
+        .set({
+          status: "checked_out",
+          borrowerUserId: lease.userId,
+          dueAt: twelveMonthsFromNow,
+          updatedAt: now,
+        })
+        .where(eq(books.id, lease.bookId));
+    });
+
+    await notifyUser({
+      userId: lease.userId,
+      kind: "book_request_delivered",
+      body: "Your long-term lease has successfully started.\nThank you.",
+    });
+
+    await logAudit({
+      userId: auth.userId,
+      actorId: auth.userId,
+      hubId: lease.hubId,
+      action: "LEASE_DELIVERED",
+      resourceType: "long_term_lease",
+      resourceId: id,
+      meta: { bookId: lease.bookId },
+    });
+
+    res.json({ request: { id, status: "lease_active" } });
     return;
   }
+
   if (row.userId !== auth.userId) {
     res.status(403).json({ error: "Only the requesting student can confirm collection." });
     return;

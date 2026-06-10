@@ -96,3 +96,21 @@ export async function ensurePublicReadableIds(): Promise<void> {
     await db.update(books).set({ refId }).where(eq(books.id, row.id));
   }
 }
+
+import { sql } from "drizzle-orm";
+
+export async function ensureLongTermLeasesTable(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS "long_term_leases" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "user_id" uuid NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "book_id" uuid NOT NULL REFERENCES "books"("id") ON DELETE CASCADE,
+      "hub_id" uuid REFERENCES "hubs"("id") ON DELETE SET NULL,
+      "deposit_amount" integer NOT NULL,
+      "status" text NOT NULL DEFAULT 'pending',
+      "requested_at" timestamp with time zone NOT NULL DEFAULT now(),
+      "approved_at" timestamp with time zone,
+      "completed_at" timestamp with time zone
+    );
+  `);
+}

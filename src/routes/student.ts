@@ -95,11 +95,18 @@ router.get("/dashboard", requireAuth, async (req, res) => {
             ) + (
               SELECT count(*)::int FROM p2p_listings pl WHERE pl.buyer_id = $1
             ) AS "totalBought",
-            (
-              SELECT count(*)::int
-              FROM p2p_listings pl
-              WHERE pl.owner_id = $1 AND pl.status IN ('sold', 'completed')
-            ) AS "totalSold",
+            COALESCE((
+  SELECT count(*)::int
+  FROM p2p_listings pl
+  WHERE pl.owner_id = $1
+    AND pl.status IN ('sold', 'completed')
+), 0)
++
+COALESCE((
+  SELECT count(*)::int
+  FROM bounty_acquisitions ba
+  WHERE ba.student_id = $1
+), 0) AS "totalSold",
             COALESCE((
               SELECT sum(pl.price)::int
               FROM p2p_listings pl
