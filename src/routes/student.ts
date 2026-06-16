@@ -231,4 +231,50 @@ router.post("/recently-viewed", requireAuth, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/student/borrow-history
+ * Returns all books the authenticated user has borrowed and returned,
+ * along with whether they have already submitted feedback for each.
+ */
+router.get("/borrow-history", requireAuth, async (req, res) => {
+  const userId = req.auth!.userId;
+  try {
+    const { rows } = await pool.query(
+      `
+      SELECT
+        le.id AS "lifecycleEventId",
+        le.book_id AS "bookId",
+        le.created_at AS "returnedAt",
+        b.title,
+        b.author,
+        b.cover_image_url AS "coverImageUrl",
+        b.isbn,
+        b.category,
+        b.hub_id AS "hubId",
+        h.name AS "hubName",
+        f.id AS "feedbackId",
+        f.rating AS "feedbackRating",
+        f.comment AS "feedbackComment",
+        f.would_recommend AS "feedbackWouldRecommend",
+        f.created_at AS "feedbackCreatedAt",
+        CASE WHEN f.id IS NOT NULL THEN true ELSE false END AS "feedbackSubmitted"
+      FROM lifecycle_events le
+      LEFT JOIN books b ON b.id = le.book_id
+      LEFT JOIN hubs h ON h.id = b.hub_id
+      LEFT JOIN feedback f ON f.user_id = $1 AND f.book_id = le.book_id
+      WHERE le.event_type = 'book_returned'
+        AND le.user_id = $1
+        AND le.book_id IS NOT NULL
+      ORDER BY le.created_at DESC
+      `,
+      [userId],
+    );
+
+    res.json({ history: rows });
+  } catch (error) {
+    logger.error({ err: error }, "Borrow history error");
+    res.status(500).json({ error: "Failed to fetch borrow history" });
+  }
+});
+
 export default router;

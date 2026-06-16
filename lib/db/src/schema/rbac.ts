@@ -29,6 +29,9 @@ export const users = pgTable("users", {
   /** Object key in private profile-images bucket (Supabase) or relative path under upload dir (local). */
   avatarStoragePath: text("avatar_storage_path"),
   avatarUpdatedAt: timestamp("avatar_updated_at", { withTimezone: true }),
+  resetOtp: text("reset_otp"),
+  resetOtpExpiresAt: timestamp("reset_otp_expires_at", { withTimezone: true }),
+  address: text("address"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -118,6 +121,16 @@ export const books = pgTable("books", {
   targetHubId: uuid("target_hub_id").references(() => hubs.id, { onDelete: "set null" }),
   /** Source hub when transfer started (physical location until received). */
   originalHubId: uuid("original_hub_id").references(() => hubs.id, { onDelete: "set null" }),
+  description: text("description"),
+  category: text("category"),
+  publisher: text("publisher"),
+  publicationDate: text("publication_date"),
+  edition: text("edition"),
+  language: text("language"),
+  numberOfPages: integer("number_of_pages"),
+  shelfNumber: text("shelf_number"),
+  numberOfCopies: integer("number_of_copies"),
+  tags: text("tags"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

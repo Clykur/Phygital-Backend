@@ -53,7 +53,8 @@ export async function loadAuthUser(userId: string): Promise<AuthUser | null> {
   const premiumUntil =
     sub && sub.currentPeriodEnd.getTime() > 1 ? sub.currentPeriodEnd.toISOString() : null;
   const subscriptionPremium =
-    sub?.tier !== "free" &&
+    !!sub &&
+    sub.tier !== "free" &&
     computePremiumActive({
       status: sub.status,
       currentPeriodEnd: sub.currentPeriodEnd,

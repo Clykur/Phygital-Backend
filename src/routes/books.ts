@@ -1,9 +1,10 @@
 import { Router, type IRouter } from "express";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql, desc } from "drizzle-orm";
 import { db } from "@workspace/db";
 import {
   bookRequests,
   books,
+  hubs,
   wallets,
   subscriptions,
   walletTransactions,
@@ -21,6 +22,7 @@ import { notifyUser } from "../lib/in-app-notifications";
 import type { DbClient } from "../lib/hub-guards";
 import { recordLifecycleEvent } from "../lib/lifecycle-events";
 import { patchBookSchema, hubPurchaseBodySchema } from "@workspace/api-zod";
+import { logger } from "src/lib/logger";
 
 const router: IRouter = Router();
 
@@ -767,6 +769,63 @@ router.patch("/:bookId", authMiddleware, requireAuth, async (req, res) => {
     meta: parsed.data,
   });
   res.json({ ok: true });
+});
+
+// --- Get Book Listings / Details ---
+
+router.get("/", async (req, res) => {
+  try {
+    const allBooks = await db.select().from(books).orderBy(desc(books.createdAt));
+    res.json({ books: allBooks });
+  } catch (error: any) {
+    logger.error({ err: error }, "Failed to fetch all books");
+    res.status(500).json({ error: "Failed to fetch books" });
+  }
+});
+
+router.get("/:bookId", async (req, res) => {
+  const bookId = pathParam(req.params["bookId"]);
+  if (!bookId) {
+    res.status(400).json({ error: "Missing book ID" });
+    return;
+  }
+
+  try {
+    const [row] = await db
+      .select({
+        book: books,
+        hubName: hubs.name,
+      })
+      .from(books)
+      .innerJoin(hubs, eq(books.hubId, hubs.id))
+      .where(eq(books.id, bookId))
+      .limit(1);
+
+    if (!row) {
+      res.status(404).json({ error: "Book not found" });
+      return;
+    }
+
+    const [stats] = await db
+      .select({
+        availableCount: sql<number>`count(case when ${books.status} = 'available' then 1 end)::int`,
+        totalCount: sql<number>`count(*)::int`,
+      })
+      .from(books)
+      .where(and(eq(books.title, row.book.title), eq(books.hubId, row.book.hubId)));
+
+    res.json({
+      book: {
+        ...row.book,
+        hubName: row.hubName,
+        availableCopiesCount: stats?.availableCount ?? 0,
+        totalCopiesCount: stats?.totalCount ?? 0,
+      },
+    });
+  } catch (error: any) {
+    logger.error({ err: error, bookId }, "Failed to fetch book details");
+    res.status(500).json({ error: "Failed to fetch book details" });
+  }
 });
 
 export default router;

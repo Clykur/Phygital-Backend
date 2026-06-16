@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq } from "drizzle-orm";
+import { eq, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@workspace/db";
 import {
@@ -21,6 +21,7 @@ import { loginSchema, registerSchema } from "@workspace/api-zod";
 import { logger } from "../lib/logger";
 import {
   getSupabaseAuthClient,
+  getSupabaseAdminClient,
   signInWithGoogleIdToken,
   supabaseAuthConfigured,
   validateSupabaseAccessToken,
@@ -413,7 +414,30 @@ router.post("/login", async (req, res) => {
   const email = parsed.data.email.toLowerCase();
   authDebug("email login request received", { email, supabaseAuth: useSupabaseAuth() });
 
-  if (useSupabaseAuth()) {
+  let shouldTrySupabase = useSupabaseAuth();
+
+  try {
+    // Optimization: check if user exists locally first
+    const [localUser] = await db
+      .select({ authUserId: users.authUserId })
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
+
+    if (localUser) {
+      if (!localUser.authUserId) {
+        // User exists locally but has no Supabase link: bypass Supabase completely
+        shouldTrySupabase = false;
+        authDebug("user exists locally with no Supabase auth; bypassing Supabase lookup", {
+          email,
+        });
+      }
+    }
+  } catch (dbErr) {
+    logger.error({ err: dbErr }, "Database check failed in login optimization");
+  }
+
+  if (shouldTrySupabase) {
     try {
       const { data, error } = await getSupabaseAuthClient().auth.signInWithPassword({
         email,
@@ -525,6 +549,62 @@ router.get("/hub-profile", authMiddleware, requireAuth, async (req, res) => {
 
   res.json({ hub });
 });
+
+router.put("/hub-profile", authMiddleware, requireAuth, async (req, res) => {
+  const membership = req.auth?.hubMemberships?.[0];
+
+  if (!membership) {
+    return res.status(404).json({
+      error: "No hub membership found",
+    });
+  }
+
+  const schema = z.object({
+    address: z.string().max(1000).nullable().optional(),
+    city: z.string().max(200).nullable().optional(),
+    district: z.string().max(200).nullable().optional(),
+    state: z.string().max(200).nullable().optional(),
+    postalCode: z.string().max(50).nullable().optional(),
+    contactPhone: z.string().max(50).nullable().optional(),
+    latitude: z.number().nullable().optional(),
+    longitude: z.number().nullable().optional(),
+  });
+
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0].message });
+  }
+
+  const { address, city, district, state, postalCode, contactPhone, latitude, longitude } =
+    parsed.data;
+
+  try {
+    const [updated] = await db
+      .update(hubs)
+      .set({
+        address: address !== undefined ? address : undefined,
+        city: city !== undefined ? city : undefined,
+        district: district !== undefined ? district : undefined,
+        state: state !== undefined ? state : undefined,
+        postalCode: postalCode !== undefined ? postalCode : undefined,
+        contactPhone: contactPhone !== undefined ? contactPhone : undefined,
+        latitude: latitude !== undefined ? latitude : undefined,
+        longitude: longitude !== undefined ? longitude : undefined,
+      })
+      .where(eq(hubs.id, membership.hubId))
+      .returning();
+
+    if (!updated) {
+      return res.status(404).json({ error: "Hub not found" });
+    }
+
+    res.json({ ok: true, hub: updated });
+  } catch (error) {
+    logger.error(error, "Failed to update hub profile");
+    res.status(500).json({ error: "Failed to update hub profile" });
+  }
+});
+
 /** Private profile photo; send `Authorization: Bearer`. */
 router.get("/profile-image", requireAuth, async (req, res) => {
   const [row] = await db
@@ -587,6 +667,158 @@ router.post("/billing/demo-premium", authMiddleware, requireAuth, async (req, re
   const authUser = await loadAuthUser(req.auth!.userId);
   const token = await signToken(authUser!);
   res.json({ token, user: authUser });
+});
+
+// --- Forgot Password Flow ---
+
+router.post("/forgot-password", async (req, res) => {
+  const emailOrPhone = req.body.email?.trim().toLowerCase();
+  if (!emailOrPhone) {
+    res.status(400).json({ error: "Email or mobile number is required" });
+    return;
+  }
+
+  try {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(or(eq(users.email, emailOrPhone), eq(users.phone, emailOrPhone)))
+      .limit(1);
+
+    if (!user) {
+      res.status(404).json({ error: "No account found with this email or mobile number" });
+      return;
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
+
+    await db
+      .update(users)
+      .set({
+        resetOtp: otp,
+        resetOtpExpiresAt: expiresAt,
+      })
+      .where(eq(users.id, user.id));
+
+    logger.info(`[Forgot Password] OTP generated for user ${user.email} (${user.id}): ${otp}`);
+
+    res.json({
+      ok: true,
+      message: "Password reset OTP sent successfully.",
+      devOtp: process.env.NODE_ENV !== "production" ? otp : undefined,
+    });
+  } catch (error: any) {
+    logger.error({ err: error }, "Forgot password error");
+    res.status(500).json({ error: "Failed to generate OTP" });
+  }
+});
+
+router.post("/verify-reset-otp", async (req, res) => {
+  const emailOrPhone = req.body.email?.trim().toLowerCase();
+  const otp = req.body.otp?.trim();
+
+  if (!emailOrPhone || !otp) {
+    res.status(400).json({ error: "Email/mobile and OTP are required" });
+    return;
+  }
+
+  try {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(or(eq(users.email, emailOrPhone), eq(users.phone, emailOrPhone)))
+      .limit(1);
+
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    if (!user.resetOtp || user.resetOtp !== otp) {
+      res.status(400).json({ error: "Invalid OTP code" });
+      return;
+    }
+
+    if (!user.resetOtpExpiresAt || user.resetOtpExpiresAt < new Date()) {
+      res.status(400).json({ error: "OTP has expired" });
+      return;
+    }
+
+    res.json({ ok: true, message: "OTP verified successfully" });
+  } catch (error: any) {
+    logger.error({ err: error }, "Verify OTP error");
+    res.status(500).json({ error: "Failed to verify OTP" });
+  }
+});
+
+router.post("/reset-password", async (req, res) => {
+  const emailOrPhone = req.body.email?.trim().toLowerCase();
+  const otp = req.body.otp?.trim();
+  const newPassword = req.body.newPassword;
+
+  if (!emailOrPhone || !otp || !newPassword) {
+    res.status(400).json({ error: "All fields are required" });
+    return;
+  }
+
+  if (newPassword.length < 8) {
+    res.status(400).json({ error: "Password must be at least 8 characters long" });
+    return;
+  }
+
+  try {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(or(eq(users.email, emailOrPhone), eq(users.phone, emailOrPhone)))
+      .limit(1);
+
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    if (!user.resetOtp || user.resetOtp !== otp) {
+      res.status(400).json({ error: "Invalid OTP code" });
+      return;
+    }
+
+    if (!user.resetOtpExpiresAt || user.resetOtpExpiresAt < new Date()) {
+      res.status(400).json({ error: "OTP has expired" });
+      return;
+    }
+
+    const passwordHash = await hashPassword(newPassword);
+
+    await db.transaction(async (tx) => {
+      await tx
+        .update(users)
+        .set({
+          passwordHash,
+          resetOtp: null,
+          resetOtpExpiresAt: null,
+        })
+        .where(eq(users.id, user.id));
+
+      if (user.authUserId && useSupabaseAuth()) {
+        try {
+          const admin = getSupabaseAdminClient();
+          await admin.auth.admin.updateUserById(user.authUserId, { password: newPassword });
+          logger.info(
+            `[Reset Password] Updated Supabase password for authUserId ${user.authUserId}`,
+          );
+        } catch (sbErr: any) {
+          logger.error({ err: sbErr }, "Failed to update password in Supabase Auth");
+        }
+      }
+    });
+
+    res.json({ ok: true, message: "Password reset successfully. You can now log in." });
+  } catch (error: any) {
+    logger.error({ err: error }, "Reset password error");
+    res.status(500).json({ error: "Failed to reset password" });
+  }
 });
 
 export default router;

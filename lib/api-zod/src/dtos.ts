@@ -77,6 +77,7 @@ export const userDtoSchema = z.object({
   accountStatus: z.string(),
   avatarStoragePath: z.string().nullable(),
   phone: z.string().nullable().optional(),
+  address: z.string().nullable().optional(),
   createdAt: z.string().or(z.date()),
 });
 
@@ -96,6 +97,16 @@ export const bookDtoSchema = z.object({
   borrowerUserId: z.string().nullable(),
   dueAt: z.string().or(z.date()).nullable(),
   returnedAt: z.string().or(z.date()).nullable(),
+  description: z.string().nullable().optional(),
+  category: z.string().nullable().optional(),
+  publisher: z.string().nullable().optional(),
+  publicationDate: z.string().nullable().optional(),
+  edition: z.string().nullable().optional(),
+  language: z.string().nullable().optional(),
+  numberOfPages: z.number().nullable().optional(),
+  shelfNumber: z.string().nullable().optional(),
+  numberOfCopies: z.number().nullable().optional(),
+  tags: z.string().nullable().optional(),
   updatedAt: z.string().or(z.date()),
   createdAt: z.string().or(z.date()),
 });

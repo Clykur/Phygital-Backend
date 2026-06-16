@@ -152,6 +152,36 @@ const createHubShelfBookSchema = z.object({
     .max(500)
     .transform((s) => s.trim())
     .refine((s) => s.length > 0, { message: "Title is required" }),
+  author: z
+    .string()
+    .max(500)
+    .transform((s) => s.trim())
+    .refine((s) => s.length > 0, { message: "Author is required" }),
+  category: z
+    .string()
+    .max(500)
+    .transform((s) => s.trim())
+    .refine((s) => s.length > 0, { message: "Category / Genre is required" }),
+  description: z
+    .string()
+    .max(5000)
+    .transform((s) => s.trim())
+    .refine((s) => s.length > 0, { message: "Description / Summary is required" }),
+  isbn: z
+    .string()
+    .max(50)
+    .optional()
+    .transform((s) => (s && s.trim().length > 0 ? s.trim() : undefined)),
+  publisher: z
+    .string()
+    .max(500)
+    .optional()
+    .transform((s) => (s && s.trim().length > 0 ? s.trim() : undefined)),
+  publicationDate: z
+    .string()
+    .max(100)
+    .optional()
+    .transform((s) => (s && s.trim().length > 0 ? s.trim() : undefined)),
   coverImageUrl: z
     .string()
     .max(2000)
@@ -159,6 +189,33 @@ const createHubShelfBookSchema = z.object({
     .transform((s) => (s && s.trim().length > 0 ? s.trim() : undefined)),
   buyPrice: z.coerce.number().int().min(0).default(0),
   borrowPrice: z.coerce.number().int().min(0).default(0),
+  status: z
+    .enum(["available", "checked_out", "reserved", "unavailable", "sold"])
+    .optional()
+    .default("available"),
+  condition: z.enum(["new", "good", "fair"]).optional().default("good"),
+  edition: z
+    .string()
+    .max(100)
+    .optional()
+    .transform((s) => (s && s.trim().length > 0 ? s.trim() : undefined)),
+  language: z
+    .string()
+    .max(100)
+    .optional()
+    .transform((s) => (s && s.trim().length > 0 ? s.trim() : undefined)),
+  numberOfPages: z.coerce.number().int().min(0).optional(),
+  shelfNumber: z
+    .string()
+    .max(100)
+    .optional()
+    .transform((s) => (s && s.trim().length > 0 ? s.trim() : undefined)),
+  numberOfCopies: z.coerce.number().int().min(1).optional().default(1),
+  tags: z
+    .string()
+    .max(1000)
+    .optional()
+    .transform((s) => (s && s.trim().length > 0 ? s.trim() : undefined)),
 });
 
 router.post("/books", authMiddleware, requireAuth, async (req, res) => {
@@ -169,7 +226,7 @@ router.post("/books", authMiddleware, requireAuth, async (req, res) => {
   }
   const parsed = createHubShelfBookSchema.safeParse(req.body);
   if (!parsed.success) {
-    const msg = parsed.error.flatten().fieldErrors.title?.[0] ?? "Invalid body";
+    const msg = Object.values(parsed.error.flatten().fieldErrors)[0]?.[0] ?? "Invalid body";
     res.status(400).json({ error: msg });
     return;
   }
@@ -194,30 +251,53 @@ router.post("/books", authMiddleware, requireAuth, async (req, res) => {
   try {
     await db.transaction(async (tx) => {
       await requireActiveHub(tx as DbClient, parsed.data.hubId);
-      const [inserted] = await tx
-        .insert(books)
-        .values({
-          refId: await nextBookRefId(),
-          title: parsed.data.title,
-          hubId: parsed.data.hubId,
-          coverImageUrl: parsed.data.coverImageUrl ?? null,
-          source: "hub_inventory",
-          status: "available",
-          buyPrice: parsed.data.buyPrice,
-          borrowPrice: parsed.data.borrowPrice,
-        })
-        .returning();
-      if (!inserted) {
-        const err = new Error("INSERT_FAILED");
-        (err as Error & { status: number }).status = 500;
-        throw err;
+      const insertedCopies: InferSelectModel<typeof books>[] = [];
+      const copiesCount = parsed.data.numberOfCopies ?? 1;
+
+      for (let i = 0; i < copiesCount; i++) {
+        const [inserted] = await tx
+          .insert(books)
+          .values({
+            refId: await nextBookRefId(),
+            title: parsed.data.title,
+            author: parsed.data.author,
+            category: parsed.data.category,
+            description: parsed.data.description,
+            isbn: parsed.data.isbn ?? null,
+            publisher: parsed.data.publisher ?? null,
+            publicationDate: parsed.data.publicationDate ?? null,
+            coverImageUrl: parsed.data.coverImageUrl ?? null,
+            hubId: parsed.data.hubId,
+            source: "hub_inventory",
+            status: parsed.data.status ?? "available",
+            buyPrice: parsed.data.buyPrice,
+            borrowPrice: parsed.data.borrowPrice,
+            condition: parsed.data.condition ?? "good",
+            edition: parsed.data.edition ?? null,
+            language: parsed.data.language ?? null,
+            numberOfPages: parsed.data.numberOfPages ?? null,
+            shelfNumber: parsed.data.shelfNumber ?? null,
+            numberOfCopies: copiesCount,
+            tags: parsed.data.tags ?? null,
+          })
+          .returning();
+        if (!inserted) {
+          const err = new Error("INSERT_FAILED");
+          (err as Error & { status: number }).status = 500;
+          throw err;
+        }
+        insertedCopies.push(inserted);
       }
-      created = inserted;
-      await tryAssignCopyToWaitingRequests(tx as DbClient, {
-        id: inserted.id,
-        hubId: inserted.hubId,
-        title: inserted.title,
-      });
+
+      created = insertedCopies[0];
+
+      for (const inserted of insertedCopies) {
+        await tryAssignCopyToWaitingRequests(tx as DbClient, {
+          id: inserted.id,
+          hubId: inserted.hubId,
+          title: inserted.title,
+        });
+      }
     });
   } catch (e) {
     const err = e as Error & { status?: number };
@@ -238,7 +318,7 @@ router.post("/books", authMiddleware, requireAuth, async (req, res) => {
     action: "HUB_BOOK_ADDED",
     resourceType: "book",
     resourceId: book.id,
-    meta: { title: parsed.data.title },
+    meta: { title: parsed.data.title, count: parsed.data.numberOfCopies ?? 1 },
   });
   res.status(201).json({ book });
 });

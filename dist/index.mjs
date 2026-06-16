@@ -13016,7 +13016,7 @@ import express from "express";
 import pinoHttp from "pino-http";
 
 // src/routes/index.ts
-import { Router as Router17 } from "express";
+import { Router as Router19 } from "express";
 
 // src/routes/health.ts
 import { Router } from "express";
@@ -17132,6 +17132,7 @@ var userDtoSchema = external_exports.object({
   accountStatus: external_exports.string(),
   avatarStoragePath: external_exports.string().nullable(),
   phone: external_exports.string().nullable().optional(),
+  address: external_exports.string().nullable().optional(),
   createdAt: external_exports.string().or(external_exports.date())
 });
 var bookDtoSchema = external_exports.object({
@@ -17150,6 +17151,16 @@ var bookDtoSchema = external_exports.object({
   borrowerUserId: external_exports.string().nullable(),
   dueAt: external_exports.string().or(external_exports.date()).nullable(),
   returnedAt: external_exports.string().or(external_exports.date()).nullable(),
+  description: external_exports.string().nullable().optional(),
+  category: external_exports.string().nullable().optional(),
+  publisher: external_exports.string().nullable().optional(),
+  publicationDate: external_exports.string().nullable().optional(),
+  edition: external_exports.string().nullable().optional(),
+  language: external_exports.string().nullable().optional(),
+  numberOfPages: external_exports.number().nullable().optional(),
+  shelfNumber: external_exports.string().nullable().optional(),
+  numberOfCopies: external_exports.number().nullable().optional(),
+  tags: external_exports.string().nullable().optional(),
   updatedAt: external_exports.string().or(external_exports.date()),
   createdAt: external_exports.string().or(external_exports.date())
 });
@@ -24312,6 +24323,7 @@ __export(schema_exports, {
   bountyAcquisitions: () => bountyAcquisitions,
   bountyRequests: () => bountyRequests,
   bountySubmissions: () => bountySubmissions,
+  feedback: () => feedback,
   hubSubscriptions: () => hubSubscriptions,
   hubs: () => hubs,
   inAppNotifications: () => inAppNotifications,
@@ -24347,6 +24359,9 @@ var users = pgTable("users", {
   /** Object key in private profile-images bucket (Supabase) or relative path under upload dir (local). */
   avatarStoragePath: text("avatar_storage_path"),
   avatarUpdatedAt: timestamp("avatar_updated_at", { withTimezone: true }),
+  resetOtp: text("reset_otp"),
+  resetOtpExpiresAt: timestamp("reset_otp_expires_at", { withTimezone: true }),
+  address: text("address"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
 });
 var subscriptions = pgTable("subscriptions", {
@@ -24418,6 +24433,16 @@ var books = pgTable("books", {
   targetHubId: uuid("target_hub_id").references(() => hubs.id, { onDelete: "set null" }),
   /** Source hub when transfer started (physical location until received). */
   originalHubId: uuid("original_hub_id").references(() => hubs.id, { onDelete: "set null" }),
+  description: text("description"),
+  category: text("category"),
+  publisher: text("publisher"),
+  publicationDate: text("publication_date"),
+  edition: text("edition"),
+  language: text("language"),
+  numberOfPages: integer("number_of_pages"),
+  shelfNumber: text("shelf_number"),
+  numberOfCopies: integer("number_of_copies"),
+  tags: text("tags"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
 });
@@ -24686,6 +24711,26 @@ var longTermLeases = pgTable("long_term_leases", {
   approvedAt: timestamp("approved_at", { withTimezone: true }),
   completedAt: timestamp("completed_at", { withTimezone: true })
 });
+
+// lib/db/src/schema/feedback.ts
+var feedback = pgTable(
+  "feedback",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    bookId: uuid("book_id").references(() => books.id, { onDelete: "cascade" }),
+    rating: integer("rating").notNull(),
+    comment: text("comment").notNull(),
+    /** Whether the reviewer would recommend this book to others. */
+    wouldRecommend: boolean("would_recommend"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    /** One feedback entry per user per book (nullable bookId entries allowed multiple). */
+    userBookUnique: uniqueIndex("feedback_user_book_unique").on(table.userId, table.bookId).where(`${table.bookId.name} IS NOT NULL`)
+  })
+);
 
 // lib/db/src/db.ts
 var { Pool: Pool2 } = pg3;
@@ -26136,7 +26181,7 @@ async function loadAuthUser(userId) {
     }
   }
   const premiumUntil = sub && sub.currentPeriodEnd.getTime() > 1 ? sub.currentPeriodEnd.toISOString() : null;
-  const subscriptionPremium = sub?.tier !== "free" && computePremiumActive({
+  const subscriptionPremium = !!sub && sub.tier !== "free" && computePremiumActive({
     status: sub.status,
     currentPeriodEnd: sub.currentPeriodEnd
   });
@@ -35555,7 +35600,21 @@ router2.post("/login", async (req, res) => {
   }
   const email = parsed.data.email.toLowerCase();
   authDebug("email login request received", { email, supabaseAuth: useSupabaseAuth() });
-  if (useSupabaseAuth()) {
+  let shouldTrySupabase = useSupabaseAuth();
+  try {
+    const [localUser] = await db.select({ authUserId: users.authUserId }).from(users).where(eq(users.email, email)).limit(1);
+    if (localUser) {
+      if (!localUser.authUserId) {
+        shouldTrySupabase = false;
+        authDebug("user exists locally with no Supabase auth; bypassing Supabase lookup", {
+          email
+        });
+      }
+    }
+  } catch (dbErr) {
+    logger.error({ err: dbErr }, "Database check failed in login optimization");
+  }
+  if (shouldTrySupabase) {
     try {
       const { data, error } = await getSupabaseAuthClient().auth.signInWithPassword({
         email,
@@ -35654,6 +35713,48 @@ router2.get("/hub-profile", authMiddleware, requireAuth, async (req, res) => {
   }
   res.json({ hub });
 });
+router2.put("/hub-profile", authMiddleware, requireAuth, async (req, res) => {
+  const membership = req.auth?.hubMemberships?.[0];
+  if (!membership) {
+    return res.status(404).json({
+      error: "No hub membership found"
+    });
+  }
+  const schema = external_exports.object({
+    address: external_exports.string().max(1e3).nullable().optional(),
+    city: external_exports.string().max(200).nullable().optional(),
+    district: external_exports.string().max(200).nullable().optional(),
+    state: external_exports.string().max(200).nullable().optional(),
+    postalCode: external_exports.string().max(50).nullable().optional(),
+    contactPhone: external_exports.string().max(50).nullable().optional(),
+    latitude: external_exports.number().nullable().optional(),
+    longitude: external_exports.number().nullable().optional()
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0].message });
+  }
+  const { address, city, district, state, postalCode, contactPhone, latitude, longitude } = parsed.data;
+  try {
+    const [updated] = await db.update(hubs).set({
+      address: address !== void 0 ? address : void 0,
+      city: city !== void 0 ? city : void 0,
+      district: district !== void 0 ? district : void 0,
+      state: state !== void 0 ? state : void 0,
+      postalCode: postalCode !== void 0 ? postalCode : void 0,
+      contactPhone: contactPhone !== void 0 ? contactPhone : void 0,
+      latitude: latitude !== void 0 ? latitude : void 0,
+      longitude: longitude !== void 0 ? longitude : void 0
+    }).where(eq(hubs.id, membership.hubId)).returning();
+    if (!updated) {
+      return res.status(404).json({ error: "Hub not found" });
+    }
+    res.json({ ok: true, hub: updated });
+  } catch (error) {
+    logger.error(error, "Failed to update hub profile");
+    res.status(500).json({ error: "Failed to update hub profile" });
+  }
+});
 router2.get("/profile-image", requireAuth, async (req, res) => {
   const [row] = await db.select({ path: users.avatarStoragePath }).from(users).where(eq(users.id, req.auth.userId)).limit(1);
   if (!row?.path) {
@@ -35701,6 +35802,113 @@ router2.post("/billing/demo-premium", authMiddleware, requireAuth, async (req, r
   const authUser = await loadAuthUser(req.auth.userId);
   const token = await signToken(authUser);
   res.json({ token, user: authUser });
+});
+router2.post("/forgot-password", async (req, res) => {
+  const emailOrPhone = req.body.email?.trim().toLowerCase();
+  if (!emailOrPhone) {
+    res.status(400).json({ error: "Email or mobile number is required" });
+    return;
+  }
+  try {
+    const [user] = await db.select().from(users).where(or(eq(users.email, emailOrPhone), eq(users.phone, emailOrPhone))).limit(1);
+    if (!user) {
+      res.status(404).json({ error: "No account found with this email or mobile number" });
+      return;
+    }
+    const otp = Math.floor(1e5 + Math.random() * 9e5).toString();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1e3);
+    await db.update(users).set({
+      resetOtp: otp,
+      resetOtpExpiresAt: expiresAt
+    }).where(eq(users.id, user.id));
+    logger.info(`[Forgot Password] OTP generated for user ${user.email} (${user.id}): ${otp}`);
+    res.json({
+      ok: true,
+      message: "Password reset OTP sent successfully.",
+      devOtp: process.env.NODE_ENV !== "production" ? otp : void 0
+    });
+  } catch (error) {
+    logger.error({ err: error }, "Forgot password error");
+    res.status(500).json({ error: "Failed to generate OTP" });
+  }
+});
+router2.post("/verify-reset-otp", async (req, res) => {
+  const emailOrPhone = req.body.email?.trim().toLowerCase();
+  const otp = req.body.otp?.trim();
+  if (!emailOrPhone || !otp) {
+    res.status(400).json({ error: "Email/mobile and OTP are required" });
+    return;
+  }
+  try {
+    const [user] = await db.select().from(users).where(or(eq(users.email, emailOrPhone), eq(users.phone, emailOrPhone))).limit(1);
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    if (!user.resetOtp || user.resetOtp !== otp) {
+      res.status(400).json({ error: "Invalid OTP code" });
+      return;
+    }
+    if (!user.resetOtpExpiresAt || user.resetOtpExpiresAt < /* @__PURE__ */ new Date()) {
+      res.status(400).json({ error: "OTP has expired" });
+      return;
+    }
+    res.json({ ok: true, message: "OTP verified successfully" });
+  } catch (error) {
+    logger.error({ err: error }, "Verify OTP error");
+    res.status(500).json({ error: "Failed to verify OTP" });
+  }
+});
+router2.post("/reset-password", async (req, res) => {
+  const emailOrPhone = req.body.email?.trim().toLowerCase();
+  const otp = req.body.otp?.trim();
+  const newPassword = req.body.newPassword;
+  if (!emailOrPhone || !otp || !newPassword) {
+    res.status(400).json({ error: "All fields are required" });
+    return;
+  }
+  if (newPassword.length < 8) {
+    res.status(400).json({ error: "Password must be at least 8 characters long" });
+    return;
+  }
+  try {
+    const [user] = await db.select().from(users).where(or(eq(users.email, emailOrPhone), eq(users.phone, emailOrPhone))).limit(1);
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    if (!user.resetOtp || user.resetOtp !== otp) {
+      res.status(400).json({ error: "Invalid OTP code" });
+      return;
+    }
+    if (!user.resetOtpExpiresAt || user.resetOtpExpiresAt < /* @__PURE__ */ new Date()) {
+      res.status(400).json({ error: "OTP has expired" });
+      return;
+    }
+    const passwordHash = await hashPassword(newPassword);
+    await db.transaction(async (tx) => {
+      await tx.update(users).set({
+        passwordHash,
+        resetOtp: null,
+        resetOtpExpiresAt: null
+      }).where(eq(users.id, user.id));
+      if (user.authUserId && useSupabaseAuth()) {
+        try {
+          const admin = getSupabaseAdminClient();
+          await admin.auth.admin.updateUserById(user.authUserId, { password: newPassword });
+          logger.info(
+            `[Reset Password] Updated Supabase password for authUserId ${user.authUserId}`
+          );
+        } catch (sbErr) {
+          logger.error({ err: sbErr }, "Failed to update password in Supabase Auth");
+        }
+      }
+    });
+    res.json({ ok: true, message: "Password reset successfully. You can now log in." });
+  } catch (error) {
+    logger.error({ err: error }, "Reset password error");
+    res.status(500).json({ error: "Failed to reset password" });
+  }
 });
 var auth_default = router2;
 
@@ -37149,6 +37357,47 @@ router4.patch("/:bookId", authMiddleware, requireAuth, async (req, res) => {
     meta: parsed.data
   });
   res.json({ ok: true });
+});
+router4.get("/", async (req, res) => {
+  try {
+    const allBooks = await db.select().from(books).orderBy(desc(books.createdAt));
+    res.json({ books: allBooks });
+  } catch (error) {
+    logger.error({ err: error }, "Failed to fetch all books");
+    res.status(500).json({ error: "Failed to fetch books" });
+  }
+});
+router4.get("/:bookId", async (req, res) => {
+  const bookId = pathParam(req.params["bookId"]);
+  if (!bookId) {
+    res.status(400).json({ error: "Missing book ID" });
+    return;
+  }
+  try {
+    const [row] = await db.select({
+      book: books,
+      hubName: hubs.name
+    }).from(books).innerJoin(hubs, eq(books.hubId, hubs.id)).where(eq(books.id, bookId)).limit(1);
+    if (!row) {
+      res.status(404).json({ error: "Book not found" });
+      return;
+    }
+    const [stats] = await db.select({
+      availableCount: sql`count(case when ${books.status} = 'available' then 1 end)::int`,
+      totalCount: sql`count(*)::int`
+    }).from(books).where(and(eq(books.title, row.book.title), eq(books.hubId, row.book.hubId)));
+    res.json({
+      book: {
+        ...row.book,
+        hubName: row.hubName,
+        availableCopiesCount: stats?.availableCount ?? 0,
+        totalCopiesCount: stats?.totalCount ?? 0
+      }
+    });
+  } catch (error) {
+    logger.error({ err: error, bookId }, "Failed to fetch book details");
+    res.status(500).json({ error: "Failed to fetch book details" });
+  }
 });
 var books_default = router4;
 
@@ -39844,9 +40093,23 @@ var NEW_BOOK_RBAC_ID = "00000000-0000-0000-0000-000000000001";
 var createHubShelfBookSchema = external_exports.object({
   hubId: external_exports.string().uuid(),
   title: external_exports.string().max(500).transform((s) => s.trim()).refine((s) => s.length > 0, { message: "Title is required" }),
+  author: external_exports.string().max(500).transform((s) => s.trim()).refine((s) => s.length > 0, { message: "Author is required" }),
+  category: external_exports.string().max(500).transform((s) => s.trim()).refine((s) => s.length > 0, { message: "Category / Genre is required" }),
+  description: external_exports.string().max(5e3).transform((s) => s.trim()).refine((s) => s.length > 0, { message: "Description / Summary is required" }),
+  isbn: external_exports.string().max(50).optional().transform((s) => s && s.trim().length > 0 ? s.trim() : void 0),
+  publisher: external_exports.string().max(500).optional().transform((s) => s && s.trim().length > 0 ? s.trim() : void 0),
+  publicationDate: external_exports.string().max(100).optional().transform((s) => s && s.trim().length > 0 ? s.trim() : void 0),
   coverImageUrl: external_exports.string().max(2e3).optional().transform((s) => s && s.trim().length > 0 ? s.trim() : void 0),
   buyPrice: external_exports.coerce.number().int().min(0).default(0),
-  borrowPrice: external_exports.coerce.number().int().min(0).default(0)
+  borrowPrice: external_exports.coerce.number().int().min(0).default(0),
+  status: external_exports.enum(["available", "checked_out", "reserved", "unavailable", "sold"]).optional().default("available"),
+  condition: external_exports.enum(["new", "good", "fair"]).optional().default("good"),
+  edition: external_exports.string().max(100).optional().transform((s) => s && s.trim().length > 0 ? s.trim() : void 0),
+  language: external_exports.string().max(100).optional().transform((s) => s && s.trim().length > 0 ? s.trim() : void 0),
+  numberOfPages: external_exports.coerce.number().int().min(0).optional(),
+  shelfNumber: external_exports.string().max(100).optional().transform((s) => s && s.trim().length > 0 ? s.trim() : void 0),
+  numberOfCopies: external_exports.coerce.number().int().min(1).optional().default(1),
+  tags: external_exports.string().max(1e3).optional().transform((s) => s && s.trim().length > 0 ? s.trim() : void 0)
 });
 router8.post("/books", authMiddleware, requireAuth, async (req, res) => {
   const auth = req.auth;
@@ -39856,7 +40119,7 @@ router8.post("/books", authMiddleware, requireAuth, async (req, res) => {
   }
   const parsed = createHubShelfBookSchema.safeParse(req.body);
   if (!parsed.success) {
-    const msg = parsed.error.flatten().fieldErrors.title?.[0] ?? "Invalid body";
+    const msg = Object.values(parsed.error.flatten().fieldErrors)[0]?.[0] ?? "Invalid body";
     res.status(400).json({ error: msg });
     return;
   }
@@ -39878,27 +40141,47 @@ router8.post("/books", authMiddleware, requireAuth, async (req, res) => {
   try {
     await db.transaction(async (tx) => {
       await requireActiveHub(tx, parsed.data.hubId);
-      const [inserted] = await tx.insert(books).values({
-        refId: await nextBookRefId(),
-        title: parsed.data.title,
-        hubId: parsed.data.hubId,
-        coverImageUrl: parsed.data.coverImageUrl ?? null,
-        source: "hub_inventory",
-        status: "available",
-        buyPrice: parsed.data.buyPrice,
-        borrowPrice: parsed.data.borrowPrice
-      }).returning();
-      if (!inserted) {
-        const err = new Error("INSERT_FAILED");
-        err.status = 500;
-        throw err;
+      const insertedCopies = [];
+      const copiesCount = parsed.data.numberOfCopies ?? 1;
+      for (let i = 0; i < copiesCount; i++) {
+        const [inserted] = await tx.insert(books).values({
+          refId: await nextBookRefId(),
+          title: parsed.data.title,
+          author: parsed.data.author,
+          category: parsed.data.category,
+          description: parsed.data.description,
+          isbn: parsed.data.isbn ?? null,
+          publisher: parsed.data.publisher ?? null,
+          publicationDate: parsed.data.publicationDate ?? null,
+          coverImageUrl: parsed.data.coverImageUrl ?? null,
+          hubId: parsed.data.hubId,
+          source: "hub_inventory",
+          status: parsed.data.status ?? "available",
+          buyPrice: parsed.data.buyPrice,
+          borrowPrice: parsed.data.borrowPrice,
+          condition: parsed.data.condition ?? "good",
+          edition: parsed.data.edition ?? null,
+          language: parsed.data.language ?? null,
+          numberOfPages: parsed.data.numberOfPages ?? null,
+          shelfNumber: parsed.data.shelfNumber ?? null,
+          numberOfCopies: copiesCount,
+          tags: parsed.data.tags ?? null
+        }).returning();
+        if (!inserted) {
+          const err = new Error("INSERT_FAILED");
+          err.status = 500;
+          throw err;
+        }
+        insertedCopies.push(inserted);
       }
-      created = inserted;
-      await tryAssignCopyToWaitingRequests(tx, {
-        id: inserted.id,
-        hubId: inserted.hubId,
-        title: inserted.title
-      });
+      created = insertedCopies[0];
+      for (const inserted of insertedCopies) {
+        await tryAssignCopyToWaitingRequests(tx, {
+          id: inserted.id,
+          hubId: inserted.hubId,
+          title: inserted.title
+        });
+      }
     });
   } catch (e) {
     const err = e;
@@ -39918,7 +40201,7 @@ router8.post("/books", authMiddleware, requireAuth, async (req, res) => {
     action: "HUB_BOOK_ADDED",
     resourceType: "book",
     resourceId: book.id,
-    meta: { title: parsed.data.title }
+    meta: { title: parsed.data.title, count: parsed.data.numberOfCopies ?? 1 }
   });
   res.status(201).json({ book });
 });
@@ -43377,6 +43660,45 @@ router13.post("/recently-viewed", requireAuth, async (req, res) => {
     res.status(500).json({ error: "Failed to record recently viewed book" });
   }
 });
+router13.get("/borrow-history", requireAuth, async (req, res) => {
+  const userId = req.auth.userId;
+  try {
+    const { rows } = await pool.query(
+      `
+      SELECT
+        le.id AS "lifecycleEventId",
+        le.book_id AS "bookId",
+        le.created_at AS "returnedAt",
+        b.title,
+        b.author,
+        b.cover_image_url AS "coverImageUrl",
+        b.isbn,
+        b.category,
+        b.hub_id AS "hubId",
+        h.name AS "hubName",
+        f.id AS "feedbackId",
+        f.rating AS "feedbackRating",
+        f.comment AS "feedbackComment",
+        f.would_recommend AS "feedbackWouldRecommend",
+        f.created_at AS "feedbackCreatedAt",
+        CASE WHEN f.id IS NOT NULL THEN true ELSE false END AS "feedbackSubmitted"
+      FROM lifecycle_events le
+      LEFT JOIN books b ON b.id = le.book_id
+      LEFT JOIN hubs h ON h.id = b.hub_id
+      LEFT JOIN feedback f ON f.user_id = $1 AND f.book_id = le.book_id
+      WHERE le.event_type = 'book_returned'
+        AND le.user_id = $1
+        AND le.book_id IS NOT NULL
+      ORDER BY le.created_at DESC
+      `,
+      [userId]
+    );
+    res.json({ history: rows });
+  } catch (error) {
+    logger.error({ err: error }, "Borrow history error");
+    res.status(500).json({ error: "Failed to fetch borrow history" });
+  }
+});
 var student_default = router13;
 
 // src/routes/bounty.ts
@@ -44121,6 +44443,281 @@ router16.get("/reverse-geocode", async (req, res) => {
 });
 var geo_default = router16;
 
+// src/routes/user.ts
+import { Router as Router17 } from "express";
+import multer from "multer";
+var router17 = Router17();
+function useSupabaseAuth2() {
+  return supabaseAuthConfigured() && Boolean(process.env.SUPABASE_ANON_KEY?.trim());
+}
+var updateProfileSchema = external_exports.object({
+  name: external_exports.string().min(1, "Name cannot be empty"),
+  email: external_exports.string().email("Invalid email format"),
+  phone: external_exports.string().nullable().optional(),
+  address: external_exports.string().nullable().optional()
+});
+var allowedTypes = /* @__PURE__ */ new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+var upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (allowedTypes.has(file.mimetype)) {
+      cb(null, true);
+      return;
+    }
+    cb(new Error("Only JPEG, PNG, WebP, or GIF images are allowed."));
+  }
+});
+router17.get("/profile", requireAuth, async (req, res) => {
+  try {
+    const authUser = await loadAuthUser(req.auth.userId);
+    if (!authUser) {
+      res.status(404).json({ error: "User profile not found" });
+      return;
+    }
+    const [user] = await db.select({
+      address: users.address
+    }).from(users).where(eq(users.id, req.auth.userId)).limit(1);
+    res.json({
+      ...authUser,
+      address: user?.address ?? null
+    });
+  } catch (error) {
+    logger.error({ err: error }, "Failed to get user profile");
+    res.status(500).json({ error: "Failed to retrieve user profile" });
+  }
+});
+router17.put("/profile", requireAuth, async (req, res) => {
+  const parsed = updateProfileSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0].message });
+    return;
+  }
+  const { name, email, phone, address } = parsed.data;
+  try {
+    const userId = req.auth.userId;
+    const [existingUser] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!existingUser) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    await db.update(users).set({
+      name,
+      email,
+      phone: phone ?? null,
+      address: address ?? null
+    }).where(eq(users.id, userId));
+    if (existingUser.authUserId && useSupabaseAuth2()) {
+      try {
+        const admin = getSupabaseAdminClient();
+        await admin.auth.admin.updateUserById(existingUser.authUserId, {
+          email,
+          user_metadata: { name, full_name: name }
+        });
+        logger.info(
+          `[Profile Update] Synced details to Supabase Auth for authUserId ${existingUser.authUserId}`
+        );
+      } catch (sbErr) {
+        logger.error({ err: sbErr }, "Failed to update profile details in Supabase Auth");
+      }
+    }
+    const updatedUser = await loadAuthUser(userId);
+    res.json({
+      ok: true,
+      message: "Profile updated successfully.",
+      user: {
+        ...updatedUser,
+        address: address ?? null
+      }
+    });
+  } catch (error) {
+    logger.error({ err: error }, "Failed to update profile");
+    res.status(500).json({ error: "Failed to update user profile" });
+  }
+});
+router17.post("/profile/upload-image", requireAuth, (req, res) => {
+  upload.single("image")(req, res, (err) => {
+    void (async () => {
+      if (err) {
+        const msg = err instanceof Error ? err.message : "Upload failed";
+        res.status(400).json({ error: msg });
+        return;
+      }
+      const file = req.file;
+      if (!file?.buffer) {
+        res.status(400).json({ error: "Missing image file (field name: image)" });
+        return;
+      }
+      const auth = req.auth;
+      try {
+        const storagePath = await saveUserProfileImage({
+          userId: auth.userId,
+          buffer: file.buffer,
+          mimetype: file.mimetype
+        });
+        await db.update(users).set({
+          avatarStoragePath: storagePath,
+          avatarUpdatedAt: /* @__PURE__ */ new Date()
+        }).where(eq(users.id, auth.userId));
+        res.status(201).json({ ok: true, message: "Avatar uploaded successfully" });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Upload failed";
+        res.status(500).json({ error: msg });
+      }
+    })();
+  });
+});
+var user_default = router17;
+
+// src/routes/feedback.ts
+import { Router as Router18 } from "express";
+var router18 = Router18();
+var createFeedbackSchema = external_exports.object({
+  bookId: external_exports.string().uuid().nullable().optional(),
+  rating: external_exports.number().int().min(1).max(5),
+  comment: external_exports.string().min(1, "Comment cannot be empty"),
+  wouldRecommend: external_exports.boolean().optional()
+});
+var updateFeedbackSchema = external_exports.object({
+  rating: external_exports.number().int().min(1).max(5).optional(),
+  comment: external_exports.string().min(1, "Comment cannot be empty").optional(),
+  wouldRecommend: external_exports.boolean().optional()
+});
+async function hasBorrowedAndReturned(userId, bookId) {
+  try {
+    const rows = await db.select({ id: lifecycleEvents.id }).from(lifecycleEvents).where(
+      and(
+        eq(lifecycleEvents.eventType, "book_returned"),
+        eq(lifecycleEvents.userId, userId),
+        eq(lifecycleEvents.bookId, bookId)
+      )
+    ).limit(1);
+    return rows.length > 0;
+  } catch {
+    return false;
+  }
+}
+router18.post("/", authMiddleware, requireAuth, async (req, res) => {
+  const parsed = createFeedbackSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid request body" });
+    return;
+  }
+  const { bookId, rating, comment, wouldRecommend } = parsed.data;
+  const userId = req.auth.userId;
+  if (bookId) {
+    const eligible = await hasBorrowedAndReturned(userId, bookId);
+    if (!eligible) {
+      res.status(403).json({
+        error: "You can only leave feedback for books you have borrowed and returned. Complete your borrow and return to unlock this feature.",
+        code: "NOT_ELIGIBLE"
+      });
+      return;
+    }
+  }
+  try {
+    if (bookId) {
+      const [existing] = await db.select({ id: feedback.id }).from(feedback).where(and(eq(feedback.userId, userId), eq(feedback.bookId, bookId))).limit(1);
+      if (existing) {
+        const [updated] = await db.update(feedback).set({
+          rating,
+          comment,
+          wouldRecommend: wouldRecommend ?? null,
+          updatedAt: /* @__PURE__ */ new Date()
+        }).where(eq(feedback.id, existing.id)).returning();
+        logger.info(`[Feedback] Updated feedback ${existing.id} by user ${userId}`);
+        res.status(200).json({ ok: true, feedback: updated, updated: true });
+        return;
+      }
+    }
+    const [inserted] = await db.insert(feedback).values({
+      userId,
+      bookId: bookId ?? null,
+      rating,
+      comment,
+      wouldRecommend: wouldRecommend ?? null
+    }).returning();
+    logger.info(`[Feedback] Feedback submitted by user ${userId} for book ${bookId ?? "General"}`);
+    res.status(201).json({ ok: true, feedback: inserted, updated: false });
+  } catch (error) {
+    if (error?.code === "23505") {
+      res.status(409).json({ error: "You have already submitted feedback for this book.", code: "DUPLICATE" });
+      return;
+    }
+    logger.error({ err: error }, "Failed to submit feedback");
+    res.status(500).json({ error: "Failed to submit feedback" });
+  }
+});
+router18.put("/:feedbackId", authMiddleware, requireAuth, async (req, res) => {
+  const feedbackId = req.params.feedbackId;
+  if (!feedbackId) {
+    res.status(400).json({ error: "Missing feedback ID" });
+    return;
+  }
+  const parsed = updateFeedbackSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid request body" });
+    return;
+  }
+  const userId = req.auth.userId;
+  try {
+    const [existing] = await db.select().from(feedback).where(and(eq(feedback.id, feedbackId), eq(feedback.userId, userId))).limit(1);
+    if (!existing) {
+      res.status(404).json({ error: "Feedback not found or not owned by you." });
+      return;
+    }
+    const updateData = { updatedAt: /* @__PURE__ */ new Date() };
+    if (parsed.data.rating !== void 0) updateData.rating = parsed.data.rating;
+    if (parsed.data.comment !== void 0) updateData.comment = parsed.data.comment;
+    if (parsed.data.wouldRecommend !== void 0)
+      updateData.wouldRecommend = parsed.data.wouldRecommend;
+    const [updated] = await db.update(feedback).set(updateData).where(eq(feedback.id, feedbackId)).returning();
+    res.json({ ok: true, feedback: updated });
+  } catch (error) {
+    logger.error({ err: error, feedbackId }, "Failed to update feedback");
+    res.status(500).json({ error: "Failed to update feedback" });
+  }
+});
+router18.get("/", async (req, res) => {
+  try {
+    const rows = await db.select({
+      id: feedback.id,
+      rating: feedback.rating,
+      comment: feedback.comment,
+      wouldRecommend: feedback.wouldRecommend,
+      createdAt: feedback.createdAt,
+      userName: users.name
+    }).from(feedback).innerJoin(users, eq(feedback.userId, users.id)).where(sql`${feedback.bookId} IS NULL`).orderBy(desc(feedback.createdAt));
+    res.json({ feedback: rows });
+  } catch (error) {
+    logger.error({ err: error }, "Failed to retrieve general feedback");
+    res.status(500).json({ error: "Failed to retrieve feedback" });
+  }
+});
+router18.get("/:bookId", async (req, res) => {
+  const bookId = req.params["bookId"];
+  if (!bookId) {
+    res.status(400).json({ error: "Missing book ID" });
+    return;
+  }
+  try {
+    const rows = await db.select({
+      id: feedback.id,
+      rating: feedback.rating,
+      comment: feedback.comment,
+      wouldRecommend: feedback.wouldRecommend,
+      createdAt: feedback.createdAt,
+      updatedAt: feedback.updatedAt,
+      userName: users.name
+    }).from(feedback).innerJoin(users, eq(feedback.userId, users.id)).where(eq(feedback.bookId, bookId)).orderBy(desc(feedback.createdAt));
+    res.json({ feedback: rows });
+  } catch (error) {
+    logger.error({ err: error, bookId }, "Failed to retrieve book feedback");
+    res.status(500).json({ error: "Failed to retrieve feedback for this book" });
+  }
+});
+var feedback_default = router18;
+
 // src/lib/book-cover-storage.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import fs3 from "node:fs/promises";
@@ -44187,36 +44784,38 @@ async function saveBookCoverImage(opts) {
 }
 
 // src/routes/index.ts
-var router17 = Router17();
-router17.get("/placeholder-book-cover-url", (req, res) => {
+var router19 = Router19();
+router19.get("/placeholder-book-cover-url", (req, res) => {
   res.json({ url: getPlaceholderBookCoverPublicUrl() });
 });
-router17.use(health_default);
-router17.use("/auth", auth_default);
-router17.use("/catalog", catalog_default);
-router17.use("/p2p", p2p_default);
-router17.use("/geo", geo_default);
-router17.use(requireAuth);
-router17.use("/books", books_default);
-router17.use("/book-requests", book_requests_default);
-router17.use("/notifications", notifications_default);
-router17.use("/hub", hub_default);
-router17.use("/activity", activity_default);
-router17.use("/admin", admin_default);
-router17.use("/wallet", wallet_default);
-router17.use("/subscriptions", subscriptions_default);
-router17.use("/student", student_default);
-router17.use("/bounty", bounty_default);
-router17.use("/long-term-leases", long_term_leases_default);
-var routes_default = router17;
+router19.use(health_default);
+router19.use("/auth", auth_default);
+router19.use("/catalog", catalog_default);
+router19.use("/p2p", p2p_default);
+router19.use("/geo", geo_default);
+router19.use("/feedback", feedback_default);
+router19.use(requireAuth);
+router19.use("/books", books_default);
+router19.use("/book-requests", book_requests_default);
+router19.use("/notifications", notifications_default);
+router19.use("/hub", hub_default);
+router19.use("/activity", activity_default);
+router19.use("/admin", admin_default);
+router19.use("/wallet", wallet_default);
+router19.use("/subscriptions", subscriptions_default);
+router19.use("/student", student_default);
+router19.use("/bounty", bounty_default);
+router19.use("/long-term-leases", long_term_leases_default);
+router19.use("/user", user_default);
+var routes_default = router19;
 
 // src/routes/uploads.ts
-import { Router as Router18 } from "express";
-import multer from "multer";
-var router18 = Router18();
+import { Router as Router20 } from "express";
+import multer2 from "multer";
+var router20 = Router20();
 var allowed = /* @__PURE__ */ new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
-var upload = multer({
-  storage: multer.memoryStorage(),
+var upload2 = multer2({
+  storage: multer2.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (allowed.has(file.mimetype)) {
@@ -44226,8 +44825,8 @@ var upload = multer({
     cb(new Error("Only JPEG, PNG, WebP, or GIF images are allowed."));
   }
 });
-router18.post("/book-cover", requireAuth, (req, res) => {
-  upload.single("image")(req, res, (err) => {
+router20.post("/book-cover", requireAuth, (req, res) => {
+  upload2.single("image")(req, res, (err) => {
     void (async () => {
       if (err) {
         const msg = err instanceof Error ? err.message : "Upload failed";
@@ -44252,8 +44851,8 @@ router18.post("/book-cover", requireAuth, (req, res) => {
     })();
   });
 });
-router18.post("/profile-image", requireAuth, (req, res) => {
-  upload.single("image")(req, res, (err) => {
+router20.post("/profile-image", requireAuth, (req, res) => {
+  upload2.single("image")(req, res, (err) => {
     void (async () => {
       if (err) {
         const msg = err instanceof Error ? err.message : "Upload failed";
@@ -44284,7 +44883,7 @@ router18.post("/profile-image", requireAuth, (req, res) => {
     })();
   });
 });
-var uploads_default = router18;
+var uploads_default = router20;
 
 // src/middleware/api-rate-limit.ts
 var buckets = /* @__PURE__ */ new Map();

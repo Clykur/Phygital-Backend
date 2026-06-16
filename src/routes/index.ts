@@ -22,6 +22,8 @@ import studentRouter from "./student";
 import bountyRouter from "./bounty";
 import longTermLeasesRouter from "./long-term-leases";
 import geoRouter from "./geo";
+import userRouter from "./user";
+import feedbackRouter from "./feedback";
 import { getPlaceholderBookCoverPublicUrl } from "../lib/book-cover-storage";
 import { requireAuth } from "../middleware/auth";
 
@@ -36,6 +38,7 @@ router.use("/auth", authRouter);
 router.use("/catalog", catalogRouter);
 router.use("/p2p", p2pRouter);
 router.use("/geo", geoRouter);
+router.use("/feedback", feedbackRouter);
 
 // Everything below requires a valid bearer token.
 router.use(requireAuth);
@@ -51,4 +54,5 @@ router.use("/subscriptions", subscriptionsRouter);
 router.use("/student", studentRouter);
 router.use("/bounty", bountyRouter);
 router.use("/long-term-leases", longTermLeasesRouter);
+router.use("/user", userRouter);
 export default router;
